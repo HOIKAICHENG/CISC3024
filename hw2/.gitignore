@@ -1,0 +1,5 @@
+data/
+results/*.pth
+__pycache__/
+*.pyc
+~$*.docx
