@@ -3,5 +3,7 @@
 *.pyc
 hw2/data/
 hw2/results/*.pth
+AI Assignment1/data/
+AI Assignment1/results/*.pth
 ~$*
 *.tmp
