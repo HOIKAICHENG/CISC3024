@@ -161,7 +161,7 @@ def test_quick_report_embeds_all_figures_tables_captions_and_live_code(
     assert "References" in text
     assert "Franchi" in text
 
-    bnl_line = "scale = scale * (1.0 + torch.randn_like(scale))"
+    bnl_line = "scale = scale * (1.0 + self.noise_std * torch.randn_like(scale))"
     averaging_line = "probabilities = sample_probs.mean(axis=0)"
     source = (ROOT / "code" / "abnn.py").read_text(encoding="utf-8")
     assert bnl_line in source and bnl_line in text

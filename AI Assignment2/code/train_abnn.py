@@ -35,6 +35,7 @@ def _member_metadata(
         "member_index": index,
         "member_seed": seed,
         "map_checkpoint_sha256": map_checkpoint_sha256,
+        "noise_std": config.noise_std,
         "config": config.to_dict(),
     }
 
@@ -106,7 +107,7 @@ def run_abnn_training(
     members, histories = [], []
     for index, seed in enumerate(seeds):
         seed_everything(seed)
-        model = convert_to_abnn(copy.deepcopy(base))
+        model = convert_to_abnn(copy.deepcopy(base), noise_std=config.noise_std)
         freeze_except_bayesian_norm(model)
         optimizer = torch.optim.SGD(
             [

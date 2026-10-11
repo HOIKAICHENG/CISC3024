@@ -725,12 +725,14 @@ def _section_two(
         "ABNN starts from a trained deterministic network and replaces its "
         "normalization layers with Bayesian Normalization Layers. For a "
         "normalized activation hⱼ, the paper perturbs the learned scale γⱼ "
-        "with independent unit Gaussian noise εⱼ:",
+        "with independent Gaussian noise εⱼ. Unit Gaussian noise on every "
+        "BatchNorm of ResNet-20 collapsed the MAP features, so this "
+        "reproduction uses εⱼ ~ N(0, 0.1²):",
     )
     _add_equation(
         document,
         "BNL(hⱼ) = ((hⱼ − μ̂ⱼ) / σ̂ⱼ) γⱼ(1 + εⱼ) + βⱼ,  "
-        "εⱼ ~ N(0, I)",
+        "εⱼ ~ N(0, 0.1² I)",
         3,
     )
     _add_paragraph(
@@ -862,7 +864,7 @@ def _section_three(document: Document) -> None:
         (
             "def forward(self, input: torch.Tensor)",
             "scale = self.weight",
-            "scale = scale * (1.0 + torch.randn_like(scale))",
+            "scale = scale * (1.0 + self.noise_std * torch.randn_like(scale))",
             "return F.batch_norm(",
             "self.eps,",
         ),

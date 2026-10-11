@@ -27,6 +27,7 @@ class ExperimentConfig:
     mc_samples: int = 3
     emphasized_classes: int = 3
     emphasis_factor: float = 5.0
+    noise_std: float = 0.1
     num_workers: int = 2
     data_dir: str = "data"
     results_dir: str = "results"

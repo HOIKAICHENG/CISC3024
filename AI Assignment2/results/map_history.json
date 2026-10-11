@@ -16,6 +16,7 @@
     "mc_samples": 3,
     "emphasized_classes": 3,
     "emphasis_factor": 5.0,
+    "noise_std": 0.1,
     "num_workers": 2,
     "data_dir": "data",
     "results_dir": "results"

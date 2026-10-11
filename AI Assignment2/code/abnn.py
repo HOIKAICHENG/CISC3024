@@ -7,12 +7,13 @@ from torch.nn import functional as F
 
 
 class BayesianBatchNorm2d(nn.BatchNorm2d):
-    def __init__(self, num_features: int, **kwargs):
+    def __init__(self, num_features: int, noise_std: float = 0.1, **kwargs):
         super().__init__(num_features, **kwargs)
         self.stochastic = True
+        self.noise_std = noise_std
 
     @classmethod
-    def from_batchnorm(cls, source: nn.BatchNorm2d) -> "BayesianBatchNorm2d":
+    def from_batchnorm(cls, source: nn.BatchNorm2d, noise_std: float = 0.1) -> "BayesianBatchNorm2d":
         reference = next(
             (
                 tensor
@@ -32,6 +33,7 @@ class BayesianBatchNorm2d(nn.BatchNorm2d):
 
         target = cls(
             source.num_features,
+            noise_std=noise_std,
             eps=source.eps,
             momentum=source.momentum,
             affine=source.affine,
@@ -77,7 +79,7 @@ class BayesianBatchNorm2d(nn.BatchNorm2d):
             scale = torch.ones(
                 self.num_features, device=input.device, dtype=input.dtype
             )
-        scale = scale * (1.0 + torch.randn_like(scale))
+        scale = scale * (1.0 + self.noise_std * torch.randn_like(scale))
         return F.batch_norm(
             input,
             running_mean,
@@ -90,14 +92,14 @@ class BayesianBatchNorm2d(nn.BatchNorm2d):
         )
 
 
-def convert_to_abnn(module: nn.Module) -> nn.Module:
+def convert_to_abnn(module: nn.Module, noise_std: float = 0.1) -> nn.Module:
     for name, child in list(module.named_children()):
         if isinstance(child, nn.BatchNorm2d) and not isinstance(
             child, BayesianBatchNorm2d
         ):
-            setattr(module, name, BayesianBatchNorm2d.from_batchnorm(child))
+            setattr(module, name, BayesianBatchNorm2d.from_batchnorm(child, noise_std=noise_std))
         else:
-            convert_to_abnn(child)
+            convert_to_abnn(child, noise_std=noise_std)
     return module
 
 
