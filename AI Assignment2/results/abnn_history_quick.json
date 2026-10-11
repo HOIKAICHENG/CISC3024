@@ -20,6 +20,25 @@
     "data_dir": "data",
     "results_dir": "results"
   },
+  "run": {
+    "mode": "quick",
+    "quick": true,
+    "effective": {
+      "dataset_limits": {
+        "train": 1000,
+        "cifar10_test": 500,
+        "svhn_test": 500,
+        "cifar100_test": 500
+      },
+      "map_epochs": 1,
+      "abnn_epochs": 1,
+      "member_seeds": [
+        101
+      ],
+      "member_count": 1,
+      "mc_samples": 2
+    }
+  },
   "members": [
     [
       {

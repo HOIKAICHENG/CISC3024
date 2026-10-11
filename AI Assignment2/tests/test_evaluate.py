@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader, Sampler, TensorDataset
 import code.evaluate as evaluate
 from code.config import ExperimentConfig
 from code.data import CIFAR_MEAN, CIFAR_STD
-from code.evaluate import evaluate_methods
+from code.evaluate import evaluate_methods as _evaluate_methods
 from code.metrics import classification_metrics, ood_metrics, predictive_entropy
 
 
@@ -30,6 +30,41 @@ def _model() -> nn.Module:
         )
         model[1].bias.copy_(torch.tensor([-0.2, 0.3]))
     return model
+
+
+def _provenance(member_count: int) -> dict:
+    return {
+        "map_checkpoint": {
+            "path": "map_checkpoint.pt",
+            "sha256": "a" * 64,
+        },
+        "member_checkpoints": [
+            {
+                "path": f"abnn_member_{index}.pt",
+                "sha256": f"{index + 1:x}" * 64,
+            }
+            for index in range(member_count)
+        ],
+    }
+
+
+def evaluate_methods(
+    config,
+    loaders,
+    map_model,
+    members,
+    quick=False,
+    *,
+    provenance=None,
+):
+    return _evaluate_methods(
+        config,
+        loaders,
+        map_model,
+        members,
+        quick=quick,
+        provenance=provenance or _provenance(len(members)),
+    )
 
 
 class _CountingModel(nn.Module):
@@ -63,8 +98,14 @@ def test_evaluation_is_a_self_consistent_persisted_artifact(tmp_path):
         _model(),
         [_model()],
         quick=True,
+        provenance=_provenance(1),
     )
 
+    assert result["run"]["mode"] == "quick"
+    assert result["run"]["effective"]["member_count"] == 1
+    assert result["run"]["effective"]["mc_samples"] == 2
+    assert result["config"]["mc_samples"] == 7
+    assert result["provenance"] == _provenance(1)
     assert set(result["methods"]) == {"map", "abnn_single", "abnn_full"}
     for method in result["methods"].values():
         probabilities = np.asarray(method["probabilities"])

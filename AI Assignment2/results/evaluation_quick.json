@@ -20,6 +20,37 @@
     "data_dir": "data",
     "results_dir": "results"
   },
+  "run": {
+    "mode": "quick",
+    "quick": true,
+    "effective": {
+      "dataset_limits": {
+        "train": 1000,
+        "cifar10_test": 500,
+        "svhn_test": 500,
+        "cifar100_test": 500
+      },
+      "map_epochs": 1,
+      "abnn_epochs": 1,
+      "member_seeds": [
+        101
+      ],
+      "member_count": 1,
+      "mc_samples": 2
+    }
+  },
+  "provenance": {
+    "map_checkpoint": {
+      "path": "map_checkpoint_quick.pt",
+      "sha256": "f954d8e748eaa83174ef73573c305a0e3fd0d38373b4ed90239b059eb9c5959e"
+    },
+    "member_checkpoints": [
+      {
+        "path": "abnn_member_0_quick.pt",
+        "sha256": "0f854d9ffbbdbce3a556f0e7b2541923218139ed0033c06d99602f3298255dda"
+      }
+    ]
+  },
   "methods": {
     "map": {
       "classification": {

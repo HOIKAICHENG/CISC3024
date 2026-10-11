@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 
 import matplotlib.pyplot as plt
@@ -6,6 +7,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import code.make_figures as figures_module
 from code.make_figures import (
     _plot_ood_entropy,
     _reliability_points,
@@ -92,12 +94,15 @@ def _fixture():
 def _write_artifacts(results, quick):
     suffix = "_quick" if quick else ""
     evaluation = _fixture()
+    run = {"mode": "quick" if quick else "full", "quick": quick}
+    evaluation["run"] = run
     (results / f"evaluation{suffix}.json").write_text(
         json.dumps(evaluation), encoding="utf-8"
     )
     (results / f"map_history{suffix}.json").write_text(
         json.dumps(
             {
+                "run": run,
                 "history": [
                     {"epoch": 1, "loss": 1.2, "accuracy": 0.45},
                     {"epoch": 2, "loss": 0.8, "accuracy": 0.70},
@@ -109,6 +114,7 @@ def _write_artifacts(results, quick):
     (results / f"abnn_history{suffix}.json").write_text(
         json.dumps(
             {
+                "run": run,
                 "members": [
                     [
                         {"epoch": 1, "loss": 1.0},
@@ -247,3 +253,136 @@ def test_missing_artifact_error_names_expected_file(tmp_path):
             tmp_path / "figures",
             quick=True,
         )
+
+
+def test_manifest_prevents_quick_full_figure_reuse(tmp_path):
+    results = tmp_path / "results"
+    figures = tmp_path / "figures"
+    results.mkdir()
+    _write_artifacts(results, quick=True)
+    _write_artifacts(results, quick=False)
+
+    make_all_figures(results, figures, quick=True)
+
+    assert figures_module.figures_are_current(
+        results,
+        figures,
+        quick=True,
+    )
+    assert not figures_module.figures_are_current(
+        results,
+        figures,
+        quick=False,
+    )
+
+    make_all_figures(results, figures, quick=False)
+
+    manifest = json.loads(
+        (figures / figures_module.MANIFEST_NAME).read_text(encoding="utf-8")
+    )
+    assert manifest["mode"] == "full"
+    assert manifest["quick"] is False
+    assert manifest["evaluation_sha256"] == hashlib.sha256(
+        (results / "evaluation.json").read_bytes()
+    ).hexdigest()
+    assert set(manifest["outputs"]) == set(figures_module.OUTPUT_NAMES)
+    assert figures_module.figures_are_current(
+        results,
+        figures,
+        quick=False,
+    )
+    assert not figures_module.figures_are_current(
+        results,
+        figures,
+        quick=True,
+    )
+
+
+def test_plotting_failure_does_not_publish_new_manifest(
+    tmp_path, monkeypatch
+):
+    results = tmp_path / "results"
+    figures = tmp_path / "figures"
+    results.mkdir()
+    _write_artifacts(results, quick=True)
+    _write_artifacts(results, quick=False)
+    make_all_figures(results, figures, quick=True)
+    original_manifest = (
+        figures / figures_module.MANIFEST_NAME
+    ).read_bytes()
+    original_outputs = {
+        name: (figures / name).read_bytes()
+        for name in figures_module.OUTPUT_NAMES
+    }
+    monkeypatch.setattr(
+        figures_module,
+        "_plot_reliability",
+        lambda evaluation: (_ for _ in ()).throw(
+            RuntimeError("simulated plotting failure")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="simulated plotting failure"):
+        make_all_figures(results, figures, quick=False)
+
+    assert (
+        figures / figures_module.MANIFEST_NAME
+    ).read_bytes() == original_manifest
+    assert {
+        name: (figures / name).read_bytes()
+        for name in figures_module.OUTPUT_NAMES
+    } == original_outputs
+    assert not figures_module.figures_are_current(
+        results,
+        figures,
+        quick=False,
+    )
+    assert figures_module.figures_are_current(
+        results,
+        figures,
+        quick=True,
+    )
+
+
+def test_manifest_rejects_tampered_figure(tmp_path):
+    results = tmp_path / "results"
+    figures = tmp_path / "figures"
+    results.mkdir()
+    _write_artifacts(results, quick=True)
+    make_all_figures(results, figures, quick=True)
+    (figures / figures_module.OUTPUT_NAMES[0]).write_bytes(b"not a png")
+
+    assert not figures_module.figures_are_current(
+        results,
+        figures,
+        quick=True,
+    )
+
+
+def test_source_change_during_plotting_is_not_published(
+    tmp_path, monkeypatch
+):
+    results = tmp_path / "results"
+    figures = tmp_path / "figures"
+    results.mkdir()
+    _write_artifacts(results, quick=True)
+    evaluation_path = results / "evaluation_quick.json"
+    original_plot = figures_module._plot_architecture
+
+    def mutate_source_then_plot():
+        payload = json.loads(evaluation_path.read_text(encoding="utf-8"))
+        payload["changed_during_plotting"] = True
+        evaluation_path.write_text(json.dumps(payload), encoding="utf-8")
+        return original_plot()
+
+    monkeypatch.setattr(
+        figures_module,
+        "_plot_architecture",
+        mutate_source_then_plot,
+    )
+
+    with pytest.raises(RuntimeError, match="source artifacts changed"):
+        make_all_figures(results, figures, quick=True)
+
+    assert not (figures / figures_module.MANIFEST_NAME).exists()
+    assert not any((figures / name).exists() for name in figures_module.OUTPUT_NAMES)

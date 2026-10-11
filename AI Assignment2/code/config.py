@@ -4,6 +4,14 @@ import random
 import numpy as np
 import torch
 
+DATASET_NAMES = ("train", "cifar10_test", "svhn_test", "cifar100_test")
+QUICK_DATASET_LIMITS = {
+    "train": 1000,
+    "cifar10_test": 500,
+    "svhn_test": 500,
+    "cifar100_test": 500,
+}
+
 
 @dataclass(frozen=True)
 class ExperimentConfig:
@@ -25,6 +33,29 @@ class ExperimentConfig:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def run_metadata(config: ExperimentConfig, quick: bool) -> dict:
+    if not isinstance(quick, bool):
+        raise TypeError("quick must be a bool")
+    return {
+        "mode": "quick" if quick else "full",
+        "quick": quick,
+        "effective": {
+            "dataset_limits": (
+                dict(QUICK_DATASET_LIMITS)
+                if quick
+                else {name: None for name in DATASET_NAMES}
+            ),
+            "map_epochs": 1 if quick else config.map_epochs,
+            "abnn_epochs": 1 if quick else config.abnn_epochs,
+            "member_seeds": list(
+                config.member_seeds[:1] if quick else config.member_seeds
+            ),
+            "member_count": 1 if quick else len(config.member_seeds),
+            "mc_samples": 2 if quick else 3,
+        },
+    }
 
 
 def seed_everything(seed: int) -> None:

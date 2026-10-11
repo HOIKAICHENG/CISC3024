@@ -5,11 +5,52 @@ import torch
 from torch.utils.data import SequentialSampler
 
 from .abnn import monte_carlo_probabilities
+from .config import run_metadata
 from .data import CIFAR_MEAN, CIFAR_STD
 from .engine import deterministic_probabilities, save_json
 from .metrics import classification_metrics, ood_metrics, predictive_entropy
 
 OOD_DATASETS = ("svhn", "cifar100")
+HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+def _validate_checkpoint_record(record, field: str) -> None:
+    if not isinstance(record, dict) or set(record) != {"path", "sha256"}:
+        raise ValueError(f"{field} must contain exactly path and sha256")
+    if not isinstance(record["path"], str) or not record["path"]:
+        raise ValueError(f"{field}.path must be a non-empty string")
+    digest = record["sha256"]
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or not set(digest).issubset(HEX_DIGITS)
+    ):
+        raise ValueError(f"{field}.sha256 must be a lowercase SHA-256 digest")
+
+
+def _validate_provenance(provenance, expected_members: int) -> None:
+    if not isinstance(provenance, dict) or set(provenance) != {
+        "map_checkpoint",
+        "member_checkpoints",
+    }:
+        raise ValueError(
+            "evaluation provenance must contain exactly map_checkpoint "
+            "and member_checkpoints"
+        )
+    _validate_checkpoint_record(
+        provenance["map_checkpoint"],
+        "provenance.map_checkpoint",
+    )
+    members = provenance["member_checkpoints"]
+    if not isinstance(members, list) or len(members) != expected_members:
+        raise ValueError(
+            "evaluation provenance member count must match evaluated members"
+        )
+    for index, member in enumerate(members):
+        _validate_checkpoint_record(
+            member,
+            f"provenance.member_checkpoints[{index}]",
+        )
 
 
 def _validate_loader_order(loaders) -> None:
@@ -59,7 +100,13 @@ def _example_images(loader, count: int = 16):
 
 
 def evaluate_methods(
-    config, loaders, map_model, members, quick: bool = False
+    config,
+    loaders,
+    map_model,
+    members,
+    quick: bool = False,
+    *,
+    provenance,
 ) -> dict:
     expected_members = 1 if quick else 3
     mode = "quick" if quick else "full"
@@ -68,6 +115,7 @@ def evaluate_methods(
             f"{mode} evaluation requires exactly {expected_members} "
             f"ABNN member{'s' if expected_members != 1 else ''}"
         )
+    _validate_provenance(provenance, expected_members)
     _validate_loader_order(loaders)
     device = torch.device("cpu")
     samples = 2 if quick else 3
@@ -119,6 +167,8 @@ def evaluate_methods(
         )
     payload = {
         "config": config.to_dict(),
+        "run": run_metadata(config, quick),
+        "provenance": provenance,
         "methods": methods,
         "example_images": images,
         "example_targets": image_targets,

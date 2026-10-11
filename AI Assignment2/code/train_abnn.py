@@ -10,7 +10,7 @@ from .abnn import (
     convert_to_abnn,
     freeze_except_bayesian_norm,
 )
-from .config import ExperimentConfig, seed_everything
+from .config import ExperimentConfig, run_metadata, seed_everything
 from .engine import (
     load_training_state,
     save_json,
@@ -178,6 +178,10 @@ def run_abnn_training(
         histories.append(list(history))
     save_json(
         Path(config.results_dir) / f"abnn_history{suffix}.json",
-        {"config": config.to_dict(), "members": histories},
+        {
+            "config": config.to_dict(),
+            "run": run_metadata(config, quick),
+            "members": histories,
+        },
     )
     return members, histories

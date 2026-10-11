@@ -3,7 +3,7 @@ import random
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 
-from .config import ExperimentConfig
+from .config import ExperimentConfig, QUICK_DATASET_LIMITS
 
 CIFAR_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR_STD = (0.2470, 0.2435, 0.2616)
@@ -48,16 +48,14 @@ def build_loaders(
         ),
     }
     if quick:
-        limits = {
-            "train": 1000,
-            "cifar10_test": 500,
-            "svhn_test": 500,
-            "cifar100_test": 500,
-        }
         sets = {
             name: Subset(
                 ds,
-                deterministic_subset_indices(len(ds), limits[name], config.seed),
+                deterministic_subset_indices(
+                    len(ds),
+                    QUICK_DATASET_LIMITS[name],
+                    config.seed,
+                ),
             )
             for name, ds in sets.items()
         }

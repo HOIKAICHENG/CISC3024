@@ -222,6 +222,9 @@ def test_abnn_training_adapts_only_norm_on_training_data(tmp_path, monkeypatch):
     )
     assert payload["members"] == histories
     assert payload["config"]["abnn_epochs"] == 4
+    assert payload["run"]["mode"] == "quick"
+    assert payload["run"]["effective"]["abnn_epochs"] == 1
+    assert payload["run"]["effective"]["member_seeds"] == [101]
 
 
 def test_full_run_writes_one_artifact_per_member(tmp_path, monkeypatch):

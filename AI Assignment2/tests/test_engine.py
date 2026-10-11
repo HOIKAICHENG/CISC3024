@@ -355,6 +355,10 @@ def test_completed_quick_checkpoint_recreates_missing_history(
     assert resumed_history == history
     payload = json.loads(history_path.read_text(encoding="utf-8"))
     assert payload["history"] == history
+    assert payload["run"]["mode"] == "quick"
+    assert payload["run"]["effective"]["map_epochs"] == 1
+    assert payload["run"]["effective"]["abnn_epochs"] == 1
+    assert payload["config"]["map_epochs"] == 4
 
 
 def test_map_training_reports_corrupt_checkpoint(tmp_path, monkeypatch):

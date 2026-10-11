@@ -5,7 +5,7 @@ import time
 import torch
 from torch import nn
 
-from .config import ExperimentConfig, seed_everything
+from .config import ExperimentConfig, run_metadata, seed_everything
 from .engine import (
     deterministic_probabilities,
     load_training_state,
@@ -125,6 +125,7 @@ def run_map_training(
             history_path,
             {
                 "config": config.to_dict(),
+                "run": run_metadata(config, quick),
                 "history": history,
                 "elapsed_seconds": elapsed_seconds,
             },
@@ -133,6 +134,7 @@ def run_map_training(
         history_path,
         {
             "config": config.to_dict(),
+            "run": run_metadata(config, quick),
             "history": history,
             "elapsed_seconds": elapsed_seconds,
         },

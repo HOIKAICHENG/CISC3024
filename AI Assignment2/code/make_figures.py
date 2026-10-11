@@ -1,7 +1,9 @@
 """Generate report figures exclusively from persisted experiment artifacts."""
 
+import hashlib
 import json
 import math
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -12,6 +14,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
 import numpy as np
+from PIL import Image
+
+from .engine import save_json
 
 
 METHODS = ("map", "abnn_single", "abnn_full")
@@ -35,6 +40,7 @@ OUTPUT_NAMES = (
     "metrics_comparison.png",
     "uncertainty_examples.png",
 )
+MANIFEST_NAME = "manifest.json"
 CIFAR10_CLASSES = (
     "airplane",
     "automobile",
@@ -51,14 +57,37 @@ CIFAR10_CLASSES = (
 
 def _save(fig, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(
-        path,
-        dpi=180,
-        bbox_inches="tight",
-        facecolor=fig.get_facecolor(),
-    )
-    plt.close(fig)
+    try:
+        fig.savefig(
+            path,
+            dpi=180,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
+    finally:
+        plt.close(fig)
     return path
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as artifact:
+        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validate_png(path: Path) -> None:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError(f"{path.name}: expected a non-empty PNG")
+    try:
+        with Image.open(path) as image:
+            image.verify()
+        with Image.open(path) as image:
+            if image.format != "PNG" or image.width <= 0 or image.height <= 0:
+                raise ValueError(f"{path.name}: expected a valid PNG")
+    except (OSError, SyntaxError) as error:
+        raise ValueError(f"{path.name}: expected a valid PNG") from error
 
 
 def _read_json(path: Path):
@@ -103,6 +132,22 @@ def _required(container: Mapping, key: str, path: Path, field: str):
             f"{path.name}: missing required field {full_field}"
         )
     return container[key]
+
+
+def _validate_artifact_mode(payload, path: Path, quick: bool) -> None:
+    root = _mapping(payload, path, "root")
+    run = _mapping(
+        _required(root, "run", path, ""),
+        path,
+        "run",
+    )
+    expected_mode = "quick" if quick else "full"
+    if run.get("mode") != expected_mode or run.get("quick") is not quick:
+        _schema_error(
+            path,
+            "run",
+            f"expected {expected_mode} mode metadata",
+        )
 
 
 def _finite_number(value, path: Path, field: str) -> float:
@@ -398,6 +443,13 @@ def _validate_evaluation(evaluation, path: Path) -> None:
         )
 
 
+def load_valid_evaluation(path) -> dict:
+    path = Path(path)
+    evaluation = _read_json(path)
+    _validate_evaluation(evaluation, path)
+    return evaluation
+
+
 def _validate_history_rows(rows, path: Path, field: str) -> None:
     rows = _sequence(rows, path, field)
     if not rows:
@@ -482,10 +534,12 @@ def _load_artifacts(results_dir, quick: bool):
     evaluation_path, map_path, abnn_path = _artifact_paths(
         results_dir, quick
     )
-    evaluation = _read_json(evaluation_path)
+    evaluation = load_valid_evaluation(evaluation_path)
     map_history = _read_json(map_path)
     abnn_history = _read_json(abnn_path)
-    _validate_evaluation(evaluation, evaluation_path)
+    _validate_artifact_mode(evaluation, evaluation_path, quick)
+    _validate_artifact_mode(map_history, map_path, quick)
+    _validate_artifact_mode(abnn_history, abnn_path, quick)
     _validate_histories(
         map_history,
         map_path,
@@ -493,6 +547,56 @@ def _load_artifacts(results_dir, quick: bool):
         abnn_path,
     )
     return evaluation, map_history, abnn_history
+
+
+def _source_digests(results_dir: Path, quick: bool) -> dict[str, str]:
+    return {
+        path.name: _sha256(path)
+        for path in _artifact_paths(results_dir, quick)
+    }
+
+
+def figures_are_current(
+    results_dir="results",
+    figures_dir="figures",
+    quick: bool = False,
+) -> bool:
+    if not isinstance(quick, bool):
+        raise TypeError("quick must be a bool")
+    results_dir = Path(results_dir)
+    figures_dir = Path(figures_dir)
+    try:
+        _load_artifacts(results_dir, quick)
+        sources = _source_digests(results_dir, quick)
+        manifest_path = figures_dir / MANIFEST_NAME
+        with manifest_path.open(encoding="utf-8") as artifact:
+            manifest = json.load(artifact)
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("mode") != ("quick" if quick else "full")
+            or manifest.get("quick") is not quick
+            or manifest.get("evaluation_sha256")
+            != sources[_artifact_paths(results_dir, quick)[0].name]
+            or manifest.get("sources") != sources
+        ):
+            return False
+        outputs = manifest.get("outputs")
+        if not isinstance(outputs, dict) or set(outputs) != set(OUTPUT_NAMES):
+            return False
+        for name in OUTPUT_NAMES:
+            path = figures_dir / name
+            _validate_png(path)
+            if outputs[name] != _sha256(path):
+                return False
+    except (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        OSError,
+        TypeError,
+        ValueError,
+    ):
+        return False
+    return True
 
 
 def _style_axis(axis, *, grid_axis: str = "y") -> None:
@@ -996,20 +1100,56 @@ def make_all_figures(
     """Build the six report figures from quick or full JSON artifacts."""
     if not isinstance(quick, bool):
         raise TypeError("quick must be a bool")
+    results_dir = Path(results_dir)
+    source_digests = _source_digests(results_dir, quick)
     evaluation, map_history, abnn_history = _load_artifacts(
         results_dir,
         quick,
     )
+    if _source_digests(results_dir, quick) != source_digests:
+        raise RuntimeError("figure source artifacts changed while loading")
     figures_dir = Path(figures_dir)
-    figures = (
-        _plot_architecture(),
-        _plot_training_curves(map_history, abnn_history),
-        _plot_reliability(evaluation),
-        _plot_ood_entropy(evaluation),
-        _plot_metrics_comparison(evaluation),
-        _plot_uncertainty_examples(evaluation),
+    builders = (
+        _plot_architecture,
+        lambda: _plot_training_curves(map_history, abnn_history),
+        lambda: _plot_reliability(evaluation),
+        lambda: _plot_ood_entropy(evaluation),
+        lambda: _plot_metrics_comparison(evaluation),
+        lambda: _plot_uncertainty_examples(evaluation),
     )
-    return [
-        _save(figure, figures_dir / name)
-        for figure, name in zip(figures, OUTPUT_NAMES)
-    ]
+    figures_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=f".{figures_dir.name}-",
+        dir=figures_dir.parent,
+    ) as temporary:
+        staging_dir = Path(temporary)
+        staged_paths = []
+        for builder, name in zip(builders, OUTPUT_NAMES):
+            staged_paths.append(_save(builder(), staging_dir / name))
+        for path in staged_paths:
+            _validate_png(path)
+        output_digests = {
+            path.name: _sha256(path) for path in staged_paths
+        }
+        if _source_digests(results_dir, quick) != source_digests:
+            raise RuntimeError(
+                "figure source artifacts changed during plotting"
+            )
+        figures_dir.mkdir(parents=True, exist_ok=True)
+        for path in staged_paths:
+            path.replace(figures_dir / path.name)
+
+    if _source_digests(results_dir, quick) != source_digests:
+        raise RuntimeError("figure source artifacts changed before publishing")
+    evaluation_path = _artifact_paths(results_dir, quick)[0]
+    save_json(
+        figures_dir / MANIFEST_NAME,
+        {
+            "mode": "quick" if quick else "full",
+            "quick": quick,
+            "evaluation_sha256": source_digests[evaluation_path.name],
+            "sources": source_digests,
+            "outputs": output_digests,
+        },
+    )
+    return [figures_dir / name for name in OUTPUT_NAMES]

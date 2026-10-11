@@ -1,0 +1,18 @@
+{
+  "mode": "quick",
+  "quick": true,
+  "evaluation_sha256": "a1db973aff41d98ff036d0af021fb2b54b36fcd0b5096dd0cf74c99b5cbbd39e",
+  "sources": {
+    "evaluation_quick.json": "a1db973aff41d98ff036d0af021fb2b54b36fcd0b5096dd0cf74c99b5cbbd39e",
+    "map_history_quick.json": "cc03b461cef2527fde63237368e1a09199a6ebe9019eaea9d640c17a5c64606c",
+    "abnn_history_quick.json": "1724f38e882ed3511b198a2a5c525072448a4d05105fe0579ea121e0b06947ca"
+  },
+  "outputs": {
+    "architecture.png": "ec04d570e53d3e1edf5ea29820896c1b22b5d19cb33224699163c2f559fc8b75",
+    "training_curves.png": "67a5559a646890bddefb0a49370ac6f9982b01356935f3aad7316229d99d1d32",
+    "reliability.png": "aea28dedee496686c332b01acc3320647a7dfb4a4c69b31cc69c5ddad171cf00",
+    "ood_entropy.png": "fb550b178374a9ab79dddc940fa37b912be7b2dab0cc756701d78c62f40125ca",
+    "metrics_comparison.png": "6f39b9955d3ed00ab74411eb33ae3069ca4d9c8986c1e80a020f0b0f4cf2433e",
+    "uncertainty_examples.png": "cf8f15a83edc3336395e7c9f5e763e0c67f457688ed8568301e6cbf5fd1acd5a"
+  }
+}
