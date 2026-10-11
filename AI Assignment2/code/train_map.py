@@ -87,6 +87,7 @@ def run_map_training(
         start = state["epoch"]
         previous_elapsed = float(state.get("elapsed_seconds", 0.0))
 
+    elapsed_seconds = previous_elapsed
     started = time.perf_counter()
     for epoch in range(start, epochs):
         learning_rate = config.map_lr * _lr_factor(epoch, epochs)
@@ -128,13 +129,12 @@ def run_map_training(
                 "elapsed_seconds": elapsed_seconds,
             },
         )
-    if not history_path.exists():
-        save_json(
-            history_path,
-            {
-                "config": config.to_dict(),
-                "history": history,
-                "elapsed_seconds": previous_elapsed,
-            },
-        )
+    save_json(
+        history_path,
+        {
+            "config": config.to_dict(),
+            "history": history,
+            "elapsed_seconds": elapsed_seconds,
+        },
+    )
     return model, history

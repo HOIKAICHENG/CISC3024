@@ -1,5 +1,7 @@
+import copy
 import json
 from pathlib import Path
+import random
 
 import numpy as np
 import pytest
@@ -403,3 +405,93 @@ def test_failed_checkpoint_write_preserves_previous_state(
     for name, value in restored.state_dict().items():
         assert torch.equal(value, expected[name])
     assert not (tmp_path / "state.pt.tmp").exists()
+
+
+@pytest.mark.parametrize("stale_text", ['{"history": []}', "{broken json"])
+def test_completed_checkpoint_reconciles_stale_or_corrupt_history(
+    tmp_path, monkeypatch, stale_text
+):
+    import code.train_map as train_map
+
+    monkeypatch.setattr(train_map, "resnet20", lambda: nn.Linear(2, 2))
+    inputs = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+    targets = torch.tensor([0, 1])
+    loader = DataLoader(TensorDataset(inputs, targets), batch_size=2)
+    loaders = {"train": loader, "cifar10_test": loader}
+    config = ExperimentConfig(
+        map_epochs=1,
+        momentum=0.0,
+        weight_decay=0.0,
+        num_workers=0,
+        results_dir=str(tmp_path),
+    )
+    _, history = run_map_training(config, loaders)
+    history_path = tmp_path / "map_history.json"
+    expected_payload = json.loads(history_path.read_text(encoding="utf-8"))
+    history_path.write_text(stale_text, encoding="utf-8")
+
+    def fail_if_training_restarts(*args, **kwargs):
+        pytest.fail("complete checkpoint unexpectedly restarted training")
+
+    monkeypatch.setattr(train_map, "train_epoch", fail_if_training_restarts)
+    _, resumed_history = run_map_training(config, loaders)
+
+    assert resumed_history == history
+    assert json.loads(history_path.read_text(encoding="utf-8")) == expected_payload
+
+
+def test_load_rejects_unknown_format_before_restoring_model(tmp_path):
+    source = nn.Linear(2, 2)
+    source_optimizer = torch.optim.SGD(source.parameters(), lr=0.1)
+    path = tmp_path / "state.pt"
+    save_training_state(path, source, source_optimizer, epoch=0, history=[])
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    state["format_version"] = 999
+    torch.save(state, path)
+
+    target = nn.Linear(2, 2)
+    target_optimizer = torch.optim.SGD(target.parameters(), lr=0.3)
+    expected_model = copy.deepcopy(target.state_dict())
+
+    with pytest.raises(ValueError, match="format_version"):
+        load_training_state(path, target, target_optimizer, restore_rng=True)
+
+    for name, value in target.state_dict().items():
+        assert torch.equal(value, expected_model[name])
+    assert target_optimizer.param_groups[0]["lr"] == 0.3
+
+
+def test_load_validates_nested_rng_before_restoring_any_state(tmp_path):
+    random.seed(1)
+    np.random.seed(1)
+    torch.manual_seed(1)
+    source = nn.Linear(2, 2)
+    source_optimizer = torch.optim.SGD(source.parameters(), lr=0.1)
+    path = tmp_path / "state.pt"
+    save_training_state(path, source, source_optimizer, epoch=0, history=[])
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    del state["rng_state"]["numpy"]
+    torch.save(state, path)
+
+    target = nn.Linear(2, 2)
+    target_optimizer = torch.optim.SGD(target.parameters(), lr=0.3)
+    expected_model = copy.deepcopy(target.state_dict())
+    random.seed(999)
+    np.random.seed(999)
+    torch.manual_seed(999)
+    expected_python_rng = random.getstate()
+    expected_numpy_rng = np.random.get_state()
+    expected_torch_rng = torch.random.get_rng_state()
+
+    with pytest.raises(ValueError, match="RNG state"):
+        load_training_state(path, target, target_optimizer, restore_rng=True)
+
+    for name, value in target.state_dict().items():
+        assert torch.equal(value, expected_model[name])
+    assert target_optimizer.param_groups[0]["lr"] == 0.3
+    assert random.getstate() == expected_python_rng
+    actual_numpy_rng = np.random.get_state()
+    assert actual_numpy_rng[0] == expected_numpy_rng[0]
+    assert np.array_equal(actual_numpy_rng[1], expected_numpy_rng[1])
+    assert actual_numpy_rng[2:] == expected_numpy_rng[2:]
+    assert torch.equal(torch.random.get_rng_state(), expected_torch_rng)

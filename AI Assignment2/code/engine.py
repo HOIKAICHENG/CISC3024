@@ -5,6 +5,8 @@ import random
 import numpy as np
 import torch
 
+CHECKPOINT_FORMAT_VERSION = 1
+
 
 def train_epoch(model, loader, optimizer, criterion, device) -> float:
     model.train()
@@ -78,7 +80,7 @@ def save_training_state(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     state = {
-        "format_version": 1,
+        "format_version": CHECKPOINT_FORMAT_VERSION,
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "epoch": epoch,
@@ -101,6 +103,20 @@ def save_training_state(
         temporary.unlink(missing_ok=True)
 
 
+def _validate_rng_state(rng_state) -> None:
+    required = {"python", "numpy", "torch"}
+    if not isinstance(rng_state, dict) or set(rng_state) != required:
+        raise ValueError(
+            "checkpoint RNG state must contain python, numpy, and torch states"
+        )
+    try:
+        random.Random().setstate(rng_state["python"])
+        np.random.RandomState().set_state(rng_state["numpy"])
+        torch.Generator(device="cpu").set_state(rng_state["torch"])
+    except (TypeError, ValueError, RuntimeError) as error:
+        raise ValueError(f"checkpoint RNG state is invalid: {error}") from error
+
+
 def load_training_state(
     path,
     model,
@@ -118,12 +134,32 @@ def load_training_state(
         ) from error
     if not isinstance(state, dict):
         raise ValueError("checkpoint must contain a dictionary")
-    required = {"model", "optimizer", "epoch", "history"}
+    required = {
+        "format_version",
+        "model",
+        "optimizer",
+        "epoch",
+        "history",
+        "rng_state",
+    }
     missing = required.difference(state)
     if missing:
         raise ValueError(
             f"checkpoint is missing required fields: {sorted(missing)}"
         )
+    if (
+        type(state["format_version"]) is not int
+        or state["format_version"] != CHECKPOINT_FORMAT_VERSION
+    ):
+        raise ValueError(
+            "checkpoint format_version "
+            f"{state['format_version']!r} is unsupported; "
+            f"expected {CHECKPOINT_FORMAT_VERSION}"
+        )
+    if not isinstance(state["model"], dict):
+        raise ValueError("checkpoint model state must be a dictionary")
+    if not isinstance(state["optimizer"], dict):
+        raise ValueError("checkpoint optimizer state must be a dictionary")
     if (
         isinstance(state["epoch"], bool)
         or not isinstance(state["epoch"], int)
@@ -132,6 +168,7 @@ def load_training_state(
         raise ValueError("checkpoint epoch must be a non-negative integer")
     if not isinstance(state["history"], list):
         raise ValueError("checkpoint history must be a list")
+    _validate_rng_state(state["rng_state"])
     if (
         expected_metadata is not None
         and state.get("metadata") != expected_metadata
@@ -139,9 +176,6 @@ def load_training_state(
         raise ValueError(
             "checkpoint metadata is incompatible with this training run"
         )
-    if restore_rng and "rng_state" not in state:
-        raise ValueError("checkpoint is missing RNG state required for resume")
-
     model.load_state_dict(state["model"])
     if optimizer is not None:
         optimizer.load_state_dict(state["optimizer"])
