@@ -1,11 +1,14 @@
 import json
 from pathlib import Path
+import shutil
+import tempfile
 
 import pytest
 from docx import Document
 
 import build_report
 from build_report import SOURCE_URL, build_report as generate_report
+from code.make_figures import make_all_figures
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,9 +66,51 @@ def _stub_report_inputs(monkeypatch, source_path: Path) -> None:
 
 @pytest.fixture(scope="module")
 def quick_report():
-    docx_path, pdf_path = generate_report(quick=True)
-    document = Document(docx_path)
-    return docx_path, pdf_path, document, _document_text(document)
+    with tempfile.TemporaryDirectory(
+        prefix=".quick-report-",
+        dir=ROOT,
+    ) as directory:
+        isolated_root = Path(directory)
+        isolated_results = isolated_root / "results"
+        isolated_code = isolated_root / "code"
+        isolated_results.mkdir()
+        isolated_code.mkdir()
+        for name in (
+            "evaluation_quick.json",
+            "map_history_quick.json",
+            "abnn_history_quick.json",
+        ):
+            shutil.copy2(ROOT / "results" / name, isolated_results / name)
+        shutil.copy2(ROOT / "code" / "abnn.py", isolated_code / "abnn.py")
+        make_all_figures(
+            isolated_results,
+            isolated_root / "figures",
+            quick=True,
+        )
+
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(build_report, "ROOT", isolated_root)
+            monkeypatch.setattr(
+                build_report,
+                "REPORT_DIR",
+                isolated_root / "report",
+            )
+            monkeypatch.setattr(
+                build_report,
+                "SOURCE_EXCERPT_FILES",
+                (isolated_code / "abnn.py",),
+            )
+            monkeypatch.setattr(
+                build_report,
+                "_convert_docx_to_pdf",
+                lambda _docx, pdf: _write_valid_pdf(
+                    Path(pdf),
+                    b"quick-report\n" * 1_000,
+                ),
+            )
+            docx_path, pdf_path = generate_report(quick=True)
+        document = Document(docx_path)
+        yield docx_path, pdf_path, document, _document_text(document)
 
 
 def test_quick_report_has_required_sections_and_measured_results(quick_report):
@@ -381,6 +426,41 @@ def test_experiment_setting_prose_uses_persisted_metadata(monkeypatch):
         "seed 77",
     ):
         assert expected in text
+
+
+def test_result_interpretation_reports_abnn_underperformance(monkeypatch):
+    evaluation = json.loads(
+        (ROOT / "results" / "evaluation_quick.json").read_text(encoding="utf-8")
+    )
+    evaluation["methods"]["map"]["classification"]["accuracy"] = 0.90
+    evaluation["methods"]["abnn_full"]["classification"]["accuracy"] = 0.20
+    evaluation["methods"]["map"]["ood"]["svhn"]["auroc"] = 0.90
+    evaluation["methods"]["abnn_full"]["ood"]["svhn"]["auroc"] = 0.30
+    evaluation["methods"]["map"]["ood"]["cifar100"]["auroc"] = 0.80
+    evaluation["methods"]["abnn_full"]["ood"]["cifar100"]["auroc"] = 0.50
+    map_history = json.loads(
+        (ROOT / "results" / "map_history_quick.json").read_text(encoding="utf-8")
+    )
+    abnn_history = json.loads(
+        (ROOT / "results" / "abnn_history_quick.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    document = Document()
+    monkeypatch.setattr(build_report, "_add_figure", lambda *_args, **_kwargs: None)
+
+    build_report._section_four(
+        document,
+        evaluation,
+        map_history,
+        abnn_history,
+        {"mode": "full"},
+        quick=False,
+    )
+    text = _document_text(document)
+
+    assert "underperformed MAP by 70.00 percentage points" in text
+    assert "no post-hoc tuning" in text
 
 
 def test_word_conversion_uses_fixed_format_export_and_cleans_up(

@@ -1162,6 +1162,21 @@ def _section_four(
         "our persisted measurements and are not values quoted from the paper.",
         bold_prefix="Measured assignment results.",
     )
+    if full_metrics["accuracy"] < map_metrics["accuracy"]:
+        accuracy_gap = (
+            map_metrics["accuracy"] - full_metrics["accuracy"]
+        ) * 100
+        _add_paragraph(
+            document,
+            "Observed outcome. The all-available-member ABNN path "
+            f"underperformed MAP by {accuracy_gap:.2f} percentage points on "
+            "CIFAR-10. Its entropy AUROC was also lower on both reported OOD "
+            "datasets. These unexpected degradations are retained exactly as "
+            "measured, with no post-hoc tuning or replacement of results. "
+            "They show that this short ResNet-20 adaptation did not reproduce "
+            "the large-model gains reported by the paper.",
+            bold_prefix="Observed outcome.",
+        )
     if quick:
         if effective["member_count"] == 1:
             quick_comparison = (
