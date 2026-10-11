@@ -1,5 +1,6 @@
 .cursor/
 .worktrees/
+.superpowers/
 **/__pycache__/
 *.pyc
 hw2/data/
