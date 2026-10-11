@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import RandomSampler
+from torch.utils.data import SequentialSampler
 
 from .abnn import monte_carlo_probabilities
 from .data import CIFAR_MEAN, CIFAR_STD
@@ -15,9 +15,10 @@ OOD_DATASETS = ("svhn", "cifar100")
 def _validate_loader_order(loaders) -> None:
     for name in ("cifar10", *OOD_DATASETS):
         loader = loaders[f"{name}_test"]
-        if isinstance(getattr(loader, "sampler", None), RandomSampler):
+        if type(getattr(loader, "sampler", None)) is not SequentialSampler:
             raise ValueError(
-                f"{name}_test must use deterministic dataset order"
+                f"{name}_test must use SequentialSampler for "
+                "deterministic dataset order"
             )
 
 
@@ -60,9 +61,16 @@ def _example_images(loader, count: int = 16):
 def evaluate_methods(
     config, loaders, map_model, members, quick: bool = False
 ) -> dict:
+    expected_members = 1 if quick else 3
+    mode = "quick" if quick else "full"
+    if len(members) != expected_members:
+        raise ValueError(
+            f"{mode} evaluation requires exactly {expected_members} "
+            f"ABNN member{'s' if expected_members != 1 else ''}"
+        )
     _validate_loader_order(loaders)
     device = torch.device("cpu")
-    samples = 2 if quick else config.mc_samples
+    samples = 2 if quick else 3
     map_id, targets = deterministic_probabilities(
         map_model, loaders["cifar10_test"], device
     )
@@ -76,10 +84,9 @@ def evaluate_methods(
         reference_targets[name] = dataset_targets
     methods = {"map": _method_result(map_id, targets, map_ood)}
 
-    evaluation_members = members[:1] if quick else members
     for name, selected in (
         ("abnn_single", members[:1]),
-        ("abnn_full", evaluation_members),
+        ("abnn_full", members),
     ):
         id_probabilities, member_targets, _ = monte_carlo_probabilities(
             selected, loaders["cifar10_test"], samples, device

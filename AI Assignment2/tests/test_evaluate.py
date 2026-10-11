@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Sampler, TensorDataset
 
 import code.evaluate as evaluate
 from code.config import ExperimentConfig
@@ -61,7 +61,7 @@ def test_evaluation_is_a_self_consistent_persisted_artifact(tmp_path):
         config,
         loaders,
         _model(),
-        [_model(), _model()],
+        [_model()],
         quick=True,
     )
 
@@ -104,8 +104,8 @@ def test_evaluation_is_a_self_consistent_persisted_artifact(tmp_path):
 @pytest.mark.parametrize(
     ("quick", "mc_samples", "expected_forward_calls"),
     [
-        (True, 9, [24, 0, 0]),
-        (False, 5, [60, 30, 30]),
+        (True, 9, [24]),
+        (False, 5, [36, 18, 18]),
     ],
 )
 def test_evaluation_uses_approved_member_and_sample_policies(
@@ -114,7 +114,8 @@ def test_evaluation_uses_approved_member_and_sample_policies(
     images = torch.full((4, 3, 2, 2), 0.5)
     targets = torch.tensor([0, 1, 0, 1])
     loader = _loader(images, targets)
-    members = [_CountingModel(), _CountingModel(), _CountingModel()]
+    member_count = 1 if quick else 3
+    members = [_CountingModel() for _ in range(member_count)]
     evaluate_methods(
         ExperimentConfig(
             results_dir=str(tmp_path),
@@ -134,6 +135,42 @@ def test_evaluation_uses_approved_member_and_sample_policies(
     assert [
         member.forward_calls for member in members
     ] == expected_forward_calls
+
+
+@pytest.mark.parametrize(
+    ("quick", "member_count", "expected_count"),
+    [
+        (True, 0, 1),
+        (True, 2, 1),
+        (False, 0, 3),
+        (False, 1, 3),
+        (False, 2, 3),
+        (False, 4, 3),
+    ],
+)
+def test_evaluation_rejects_wrong_member_count(
+    tmp_path, quick, member_count, expected_count
+):
+    images = torch.full((4, 3, 2, 2), 0.5)
+    targets = torch.tensor([0, 1, 0, 1])
+    loader = _loader(images, targets)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"{'quick' if quick else 'full'} evaluation requires exactly "
+        rf"{expected_count} ABNN member",
+    ):
+        evaluate_methods(
+            ExperimentConfig(results_dir=str(tmp_path), num_workers=0),
+            {
+                "cifar10_test": loader,
+                "svhn_test": loader,
+                "cifar100_test": loader,
+            },
+            _model(),
+            [_model() for _ in range(member_count)],
+            quick=quick,
+        )
 
 
 @pytest.mark.parametrize(
@@ -184,7 +221,7 @@ def test_evaluation_rejects_target_order_changes_for_every_dataset(
             ExperimentConfig(results_dir=str(tmp_path), num_workers=0),
             loaders,
             _model(),
-            [_model()],
+            [_model(), _model(), _model()],
         )
 
 
@@ -210,7 +247,7 @@ def test_evaluation_rejects_examples_not_aligned_with_saved_predictions(
             ExperimentConfig(results_dir=str(tmp_path), num_workers=0),
             loaders,
             _model(),
-            [_model()],
+            [_model(), _model(), _model()],
         )
 
 
@@ -238,7 +275,7 @@ def test_nonfinite_evaluation_does_not_replace_previous_artifact(
                 "cifar100_test": loader,
             },
             _model(),
-            [_model()],
+            [_model(), _model(), _model()],
         )
 
     assert output.read_text(encoding="utf-8") == previous
@@ -267,5 +304,43 @@ def test_evaluation_rejects_randomized_dataset_order(tmp_path):
                 "cifar100_test": loader,
             },
             _model(),
-            [_model()],
+            [_model(), _model(), _model()],
+        )
+
+
+class _CustomSequentialSampler(Sampler):
+    def __init__(self, data_source):
+        self.data_source = data_source
+
+    def __iter__(self):
+        return iter(range(len(self.data_source)))
+
+    def __len__(self):
+        return len(self.data_source)
+
+
+def test_evaluation_rejects_custom_sampler(tmp_path):
+    images = torch.full((4, 3, 2, 2), 0.5)
+    mean = images.new_tensor(CIFAR_MEAN).view(1, 3, 1, 1)
+    std = images.new_tensor(CIFAR_STD).view(1, 3, 1, 1)
+    dataset = TensorDataset(
+        (images - mean) / std,
+        torch.zeros(4, dtype=torch.long),
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=2,
+        sampler=_CustomSequentialSampler(dataset),
+    )
+
+    with pytest.raises(ValueError, match="SequentialSampler"):
+        evaluate_methods(
+            ExperimentConfig(results_dir=str(tmp_path), num_workers=0),
+            {
+                "cifar10_test": loader,
+                "svhn_test": loader,
+                "cifar100_test": loader,
+            },
+            _model(),
+            [_model(), _model(), _model()],
         )
