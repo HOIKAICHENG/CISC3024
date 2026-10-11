@@ -30,6 +30,37 @@ def _document_text(document: Document) -> str:
     return "\n".join((*paragraphs, *cells))
 
 
+def _write_valid_docx(path: Path, text: str) -> bytes:
+    document = Document()
+    document.add_paragraph(text)
+    document.save(path)
+    return path.read_bytes()
+
+
+def _write_valid_pdf(path: Path, marker: bytes) -> bytes:
+    content = b"%PDF-1.7\n" + marker + b"\n%%EOF\n"
+    path.write_bytes(content)
+    return content
+
+
+def _stub_report_inputs(monkeypatch, source_path: Path) -> None:
+    monkeypatch.setattr(
+        build_report,
+        "_report_source_paths",
+        lambda _quick: (source_path,),
+    )
+    monkeypatch.setattr(
+        build_report,
+        "_load_report_artifacts",
+        lambda _quick: ({}, {}, {}, {}),
+    )
+    monkeypatch.setattr(
+        build_report,
+        "_compose_document",
+        lambda *_args, **_kwargs: Document(),
+    )
+
+
 @pytest.fixture(scope="module")
 def quick_report():
     docx_path, pdf_path = generate_report(quick=True)
@@ -144,6 +175,212 @@ def test_word_conversion_closes_document_and_application_on_error(
 
     assert word.document.closed
     assert word.quit_called
+
+
+def test_quick_build_uses_separate_names_and_preserves_final_sentinels(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.txt"
+    source.write_text("stable", encoding="utf-8")
+    _stub_report_inputs(monkeypatch, source)
+    monkeypatch.setattr(build_report, "REPORT_DIR", tmp_path)
+    monkeypatch.setattr(
+        build_report,
+        "_convert_docx_to_pdf",
+        lambda _docx, pdf: _write_valid_pdf(Path(pdf), b"quick"),
+    )
+
+    final_docx = tmp_path / build_report.DOCX_NAME
+    final_pdf = tmp_path / build_report.PDF_NAME
+    final_docx.write_bytes(b"FINAL-DOCX-SENTINEL")
+    final_pdf.write_bytes(b"FINAL-PDF-SENTINEL")
+
+    quick_docx, quick_pdf = generate_report(quick=True)
+
+    assert quick_docx.name == "AI_Assignment2_ABNN_Report_QUICK.docx"
+    assert quick_pdf.name == "AI_Assignment2_ABNN_Report_QUICK.pdf"
+    assert quick_docx.exists() and quick_pdf.exists()
+    assert final_docx.read_bytes() == b"FINAL-DOCX-SENTINEL"
+    assert final_pdf.read_bytes() == b"FINAL-PDF-SENTINEL"
+    assert not any("report-" in path.name for path in tmp_path.iterdir())
+
+
+def test_conversion_failure_preserves_existing_published_pair(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.txt"
+    source.write_text("stable", encoding="utf-8")
+    _stub_report_inputs(monkeypatch, source)
+    monkeypatch.setattr(build_report, "REPORT_DIR", tmp_path)
+    monkeypatch.setattr(
+        build_report,
+        "_convert_docx_to_pdf",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("conversion failed")),
+    )
+
+    final_docx = tmp_path / build_report.DOCX_NAME
+    final_pdf = tmp_path / build_report.PDF_NAME
+    old_docx = _write_valid_docx(final_docx, "old final document")
+    old_pdf = _write_valid_pdf(final_pdf, b"old-final-pdf")
+
+    with pytest.raises(RuntimeError, match="conversion failed"):
+        generate_report(quick=False)
+
+    assert final_docx.read_bytes() == old_docx
+    assert final_pdf.read_bytes() == old_pdf
+    assert not any("report-" in path.name for path in tmp_path.iterdir())
+
+
+def test_second_file_publication_failure_restores_existing_pair(
+    tmp_path, monkeypatch
+):
+    final_docx = tmp_path / build_report.DOCX_NAME
+    final_pdf = tmp_path / build_report.PDF_NAME
+    old_docx = _write_valid_docx(final_docx, "old final document")
+    old_pdf = _write_valid_pdf(final_pdf, b"old-final-pdf")
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    staged_docx = staging / final_docx.name
+    staged_pdf = staging / final_pdf.name
+    _write_valid_docx(staged_docx, "new document")
+    _write_valid_pdf(staged_pdf, b"new-pdf")
+
+    real_replace = build_report._replace_file
+
+    def fail_second_publish(source, destination):
+        if Path(source) == staged_pdf and Path(destination) == final_pdf:
+            raise OSError("simulated second-file replacement failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(build_report, "_replace_file", fail_second_publish)
+
+    with pytest.raises(RuntimeError, match="restored the previous pair"):
+        build_report._publish_report_pair(
+            staged_docx,
+            staged_pdf,
+            final_docx,
+            final_pdf,
+        )
+
+    assert final_docx.read_bytes() == old_docx
+    assert final_pdf.read_bytes() == old_pdf
+    assert not staged_docx.exists()
+    assert not staged_pdf.exists()
+    assert not any(
+        "report-backup-" in path.name for path in tmp_path.iterdir()
+    )
+
+
+def test_report_source_snapshot_includes_figures_and_excerpt_files():
+    paths = set(build_report._report_source_paths(quick=True))
+    assert {
+        ROOT / "figures" / name for name in FIGURE_NAMES
+    }.issubset(paths)
+    assert ROOT / "code" / "abnn.py" in paths
+
+
+def test_source_change_during_composition_aborts_before_conversion(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "embedded-source.txt"
+    source.write_text("before", encoding="utf-8")
+    monkeypatch.setattr(build_report, "REPORT_DIR", tmp_path / "report")
+    monkeypatch.setattr(
+        build_report,
+        "_report_source_paths",
+        lambda _quick: (source,),
+    )
+    monkeypatch.setattr(
+        build_report,
+        "_load_report_artifacts",
+        lambda _quick: ({}, {}, {}, {}),
+    )
+
+    def compose_and_mutate(*_args, **_kwargs):
+        source.write_text("after", encoding="utf-8")
+        return Document()
+
+    monkeypatch.setattr(build_report, "_compose_document", compose_and_mutate)
+    monkeypatch.setattr(
+        build_report,
+        "_convert_docx_to_pdf",
+        lambda *_args: pytest.fail("conversion must not start"),
+    )
+
+    with pytest.raises(RuntimeError, match="changed during composition"):
+        generate_report(quick=True)
+
+    assert not (tmp_path / "report").exists()
+
+
+def test_experiment_setting_prose_uses_persisted_metadata(monkeypatch):
+    evaluation = json.loads(
+        (ROOT / "results" / "evaluation_quick.json").read_text(encoding="utf-8")
+    )
+    evaluation["config"].update(
+        {
+            "seed": 77,
+            "member_seeds": [201, 202, 203, 204],
+            "map_epochs": 41,
+            "abnn_epochs": 13,
+            "mc_samples": 6,
+            "emphasized_classes": 7,
+            "emphasis_factor": 9.0,
+        }
+    )
+    evaluation["run"]["effective"].update(
+        {
+            "dataset_limits": {
+                "train": 123,
+                "cifar10_test": 45,
+                "svhn_test": 46,
+                "cifar100_test": 47,
+            },
+            "map_epochs": 2,
+            "abnn_epochs": 3,
+            "member_seeds": [201, 202],
+            "member_count": 2,
+            "mc_samples": 4,
+        }
+    )
+    map_history = json.loads(
+        (ROOT / "results" / "map_history_quick.json").read_text(encoding="utf-8")
+    )
+    abnn_history = json.loads(
+        (ROOT / "results" / "abnn_history_quick.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    document = Document()
+    monkeypatch.setattr(build_report, "_add_figure", lambda *_args, **_kwargs: None)
+
+    build_report._section_two(document, evaluation, quick=True)
+    build_report._section_four(
+        document,
+        evaluation,
+        map_history,
+        abnn_history,
+        {"mode": "quick"},
+        quick=True,
+    )
+    text = _document_text(document)
+
+    for expected in (
+        "7 seeded emphasized classes at weight 9",
+        "123 training images",
+        "45 CIFAR-10 test examples",
+        "46 SVHN test examples",
+        "47 CIFAR-100 test examples",
+        "2 MAP epochs",
+        "3 ABNN adaptation epochs",
+        "2 members",
+        "4 Monte Carlo draws",
+        "41 MAP epochs",
+        "13 ABNN adaptation epochs",
+        "seed 77",
+    ):
+        assert expected in text
 
 
 def test_word_conversion_uses_fixed_format_export_and_cleans_up(

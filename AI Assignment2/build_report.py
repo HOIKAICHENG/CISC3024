@@ -12,7 +12,9 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import tempfile
+import zipfile
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
@@ -34,6 +36,9 @@ STUDENT_ID = "UC325381"
 REPORT_DIR = ROOT / "report"
 DOCX_NAME = "AI_Assignment2_ABNN_Report.docx"
 PDF_NAME = "AI_Assignment2_ABNN_Report.pdf"
+QUICK_DOCX_NAME = "AI_Assignment2_ABNN_Report_QUICK.docx"
+QUICK_PDF_NAME = "AI_Assignment2_ABNN_Report_QUICK.pdf"
+SOURCE_EXCERPT_FILES = (ROOT / "code" / "abnn.py",)
 FONT = "Aptos"
 MONO_FONT = "Consolas"
 ACCENT = RGBColor(31, 78, 121)
@@ -105,6 +110,46 @@ def _artifact_paths(quick: bool) -> tuple[Path, Path, Path]:
         ROOT / "results" / f"map_history{suffix}.json",
         ROOT / "results" / f"abnn_history{suffix}.json",
     )
+
+
+def _report_source_paths(quick: bool) -> tuple[Path, ...]:
+    return (
+        *_artifact_paths(quick),
+        ROOT / "figures" / "manifest.json",
+        *(ROOT / "figures" / name for name in OUTPUT_NAMES),
+        *SOURCE_EXCERPT_FILES,
+    )
+
+
+def _source_snapshot(paths) -> dict[Path, str]:
+    snapshot = {}
+    for value in paths:
+        path = Path(value)
+        if not path.is_file():
+            raise FileNotFoundError(f"Required report source not found: {path}")
+        snapshot[path] = _sha256(path)
+    return snapshot
+
+
+def _assert_source_snapshot(
+    snapshot: dict[Path, str], phase: str
+) -> None:
+    try:
+        current = {path: _sha256(path) for path in snapshot}
+    except (FileNotFoundError, OSError) as error:
+        raise RuntimeError(
+            f"Report source artifacts changed {phase}; no report was published."
+        ) from error
+    if current != snapshot:
+        changed = [
+            path.name
+            for path, digest in snapshot.items()
+            if current.get(path) != digest
+        ]
+        raise RuntimeError(
+            f"Report source artifacts changed {phase}: "
+            f"{', '.join(changed)}. No report was published."
+        )
 
 
 def _load_report_artifacts(quick: bool) -> tuple[dict, dict, dict, dict]:
@@ -635,7 +680,20 @@ def _section_one(document: Document) -> None:
     )
 
 
-def _section_two(document: Document, quick: bool) -> None:
+def _plain_number(value) -> str:
+    number = float(value)
+    return str(int(number)) if number.is_integer() else f"{number:g}"
+
+
+def _counted(value, singular: str, plural: str | None = None) -> str:
+    count = int(value)
+    return f"{count} {singular if count == 1 else plural or singular + 's'}"
+
+
+def _section_two(
+    document: Document, evaluation: dict, quick: bool
+) -> None:
+    config = evaluation["config"]
     _heading(document, "2. Algorithm Description")
     _heading(document, "2.1 From MAP to Bayesian prediction", 2)
     _add_paragraph(
@@ -691,9 +749,10 @@ def _section_two(document: Document, quick: bool) -> None:
         "deep-network posterior. The paper therefore starts several ABNN "
         "members from the same MAP checkpoint and changes class weights during "
         "adaptation so that members specialize differently. Our member m "
-        "minimizes weighted cross-entropy with three seeded emphasized classes "
-        "at weight five. At inference, M members and L Gaussian draws per "
-        "member approximate the Bayesian integral:",
+        "minimizes weighted cross-entropy with "
+        f"{config['emphasized_classes']} seeded emphasized classes at weight "
+        f"{_plain_number(config['emphasis_factor'])}. At inference, M members "
+        "and L Gaussian draws per member approximate the Bayesian integral:",
     )
     _add_equation(
         document,
@@ -886,15 +945,24 @@ def _section_four(
     manifest: dict,
     quick: bool,
 ) -> None:
+    config = evaluation["config"]
+    effective = evaluation["run"]["effective"]
+    limits = effective["dataset_limits"]
     _heading(document, "4. Experiment Settings and Results")
     if quick:
         warning = _add_paragraph(
             document,
             "SMOKE-TEST DATA — NOT THE FINAL SUBMISSION. The values below "
-            "come from 1,000 training images, 500 examples per evaluation "
-            "dataset, one MAP epoch, one ABNN adaptation epoch, one member, "
-            "and two Monte Carlo draws. They validate execution and document "
-            "generation only; they are not evidence of final model quality.",
+            f"come from {limits['train']} training images, "
+            f"{limits['cifar10_test']} CIFAR-10 test examples, "
+            f"{limits['svhn_test']} SVHN test examples, and "
+            f"{limits['cifar100_test']} CIFAR-100 test examples; "
+            f"{_counted(effective['map_epochs'], 'MAP epoch')}, "
+            f"{_counted(effective['abnn_epochs'], 'ABNN adaptation epoch')}, "
+            f"{_counted(effective['member_count'], 'member')}, and "
+            f"{_counted(effective['mc_samples'], 'Monte Carlo draw')}. "
+            "They validate execution and document generation only; they are "
+            "not evidence of final model quality.",
             before=4,
             after=8,
         )
@@ -1095,24 +1163,39 @@ def _section_four(
         bold_prefix="Measured assignment results.",
     )
     if quick:
+        if effective["member_count"] == 1:
+            quick_comparison = (
+                "In quick mode, “ABNN (single member)” and “ABNN (all "
+                "available members)” both use the same one adapted member. "
+                "Their different numbers arise from separate stochastic "
+                "Monte Carlo passes, not from a multimodal ensemble. "
+            )
+        else:
+            quick_comparison = (
+                "In this quick mode, the all-available path uses "
+                f"{_counted(effective['member_count'], 'adapted member')} "
+                "while the single-member path uses one. "
+            )
         _add_paragraph(
             document,
-            "In quick mode, “ABNN (single member)” and “ABNN (all available "
-            "members)” both use the same one adapted member. Their different "
-            "numbers arise from separate stochastic Monte Carlo passes, not "
-            "from a multimodal three-member ensemble. The one-epoch model is "
-            "near chance accuracy, so apparent OOD improvements or "
-            "calibration regressions must not be generalized. The full run "
-            "will use three members and is the first mode in which the "
-            "single-versus-ensemble comparison has its intended meaning.",
+            quick_comparison
+            + f"The {_counted(effective['map_epochs'], 'MAP epoch')} model "
+            "is not a basis for generalizing apparent OOD improvements or "
+            "calibration regressions. The configured full run will use "
+            f"{_counted(len(config['member_seeds']), 'member')} and "
+            f"{_counted(config['mc_samples'], 'Monte Carlo draw')} per "
+            "member, where the single-versus-ensemble comparison has its "
+            "intended meaning.",
         )
     else:
         _add_paragraph(
             document,
-            "The full report uses three adapted members and three draws per "
+            "The full report uses "
+            f"{_counted(effective['member_count'], 'adapted member')} and "
+            f"{_counted(effective['mc_samples'], 'Monte Carlo draw')} per "
             "member. Even then, differences remain descriptive because the "
-            "study has one training seed and a much shorter schedule than the "
-            "paper.",
+            f"study uses configured MAP seed {config['seed']} and a much "
+            "shorter schedule than the paper.",
         )
 
     _heading(document, "4.6 Limitations", 2)
@@ -1120,12 +1203,16 @@ def _section_four(
         "CPU model scale: CIFAR ResNet-20 is much smaller than the "
         "ResNet-50 and WideResNet-28×10 models studied in the CVPR paper, so "
         "absolute paper results are not directly comparable.",
-        "Short schedule: even the planned full run uses 20 MAP epochs and "
-        "five ABNN adaptation epochs; the quick smoke test uses only one of "
-        "each and is deliberately under-trained.",
-        "One seed: the assignment uses one global MAP seed. Without repeated "
-        "training seeds, small metric differences have no confidence "
-        "interval and should not be presented as statistically conclusive.",
+        "Short schedule: the configured full run uses "
+        f"{_counted(config['map_epochs'], 'MAP epoch')} and "
+        f"{_counted(config['abnn_epochs'], 'ABNN adaptation epoch')}; this "
+        f"report uses {_counted(effective['map_epochs'], 'MAP epoch')} and "
+        f"{_counted(effective['abnn_epochs'], 'ABNN adaptation epoch')} and "
+        "is deliberately short relative to the paper.",
+        f"One seed: the assignment uses global MAP seed {config['seed']}. "
+        "Without repeated training seeds, small metric differences have no "
+        "confidence interval and should not be presented as statistically "
+        "conclusive.",
         "OOD dataset choice: SVHN supplies a strong semantic/domain shift, "
         "while CIFAR-100 is visually closer to CIFAR-10. These two datasets "
         "do not represent all real deployment shifts and entropy is only one "
@@ -1138,7 +1225,10 @@ def _section_four(
         _add_bullet(document, limitation)
 
 
-def _section_five(document: Document, quick: bool) -> None:
+def _section_five(
+    document: Document, evaluation: dict, quick: bool
+) -> None:
+    config = evaluation["config"]
     _heading(document, "5. What I Have Learnt")
     _add_paragraph(
         document,
@@ -1178,8 +1268,9 @@ def _section_five(document: Document, quick: bool) -> None:
             "The current low-accuracy numbers are visibly labeled as a smoke "
             "test; presenting them as final evidence would be misleading."
             if quick
-            else "The final values remain a one-seed, short-schedule CPU study "
-            "and should be interpreted at that scale."
+            else "The final values remain a short-schedule CPU study using "
+            f"configured MAP seed {config['seed']} and should be interpreted "
+            "at that scale."
         ),
     )
 
@@ -1265,7 +1356,7 @@ def _compose_document(
     _configure_document(document, quick)
     _title_page(document, quick)
     _section_one(document)
-    _section_two(document, quick)
+    _section_two(document, evaluation, quick)
     _section_three(document)
     _section_four(
         document,
@@ -1275,7 +1366,7 @@ def _compose_document(
         manifest,
         quick,
     )
-    _section_five(document, quick)
+    _section_five(document, evaluation, quick)
     _section_six(document)
     _references(document)
     return document
@@ -1354,13 +1445,127 @@ def _convert_docx_to_pdf(docx_path: Path, pdf_path: Path) -> Path:
     return pdf_path
 
 
+def _validate_docx(path: Path) -> None:
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError(f"Expected a non-empty DOCX at {path}")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if archive.testzip() is not None:
+                raise ValueError("DOCX contains a corrupt ZIP member")
+            if "word/document.xml" not in archive.namelist():
+                raise ValueError("DOCX is missing word/document.xml")
+        Document(path)
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        raise ValueError(f"Invalid staged DOCX {path}: {error}") from error
+
+
+def _validate_pdf(path: Path) -> None:
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError(f"Expected a non-empty PDF at {path}")
+    with path.open("rb") as artifact:
+        header = artifact.read(8)
+        artifact.seek(max(0, path.stat().st_size - 1024))
+        trailer = artifact.read()
+    if not header.startswith(b"%PDF-") or b"%%EOF" not in trailer:
+        raise ValueError(f"Invalid staged PDF structure at {path}")
+
+
+def _validate_report_pair(docx_path: Path, pdf_path: Path) -> None:
+    _validate_docx(docx_path)
+    _validate_pdf(pdf_path)
+
+
+def _replace_file(source: Path, destination: Path) -> None:
+    Path(source).replace(destination)
+
+
+def _publish_report_pair(
+    staged_docx: Path,
+    staged_pdf: Path,
+    published_docx: Path,
+    published_pdf: Path,
+) -> None:
+    staged_docx = Path(staged_docx)
+    staged_pdf = Path(staged_pdf)
+    published_docx = Path(published_docx)
+    published_pdf = Path(published_pdf)
+    try:
+        _validate_report_pair(staged_docx, staged_pdf)
+        published_docx.parent.mkdir(parents=True, exist_ok=True)
+        if published_pdf.parent != published_docx.parent:
+            raise ValueError("DOCX and PDF must publish to the same directory")
+
+        existing = (published_docx.exists(), published_pdf.exists())
+        if existing[0] != existing[1]:
+            raise RuntimeError(
+                "Refusing to replace an incomplete existing report pair"
+            )
+        previous_pair = all(existing)
+        if previous_pair:
+            _validate_report_pair(published_docx, published_pdf)
+
+        with tempfile.TemporaryDirectory(
+            prefix="report-backup-",
+            dir=published_docx.parent,
+        ) as backup_directory:
+            backup_directory = Path(backup_directory)
+            backups = (
+                backup_directory / published_docx.name,
+                backup_directory / published_pdf.name,
+            )
+            if previous_pair:
+                shutil.copy2(published_docx, backups[0])
+                shutil.copy2(published_pdf, backups[1])
+
+            try:
+                _replace_file(staged_docx, published_docx)
+                _replace_file(staged_pdf, published_pdf)
+                _validate_report_pair(published_docx, published_pdf)
+            except Exception as error:
+                rollback_errors = []
+                for destination, backup in zip(
+                    (published_docx, published_pdf), backups
+                ):
+                    try:
+                        if previous_pair:
+                            _replace_file(backup, destination)
+                        else:
+                            destination.unlink(missing_ok=True)
+                    except Exception as rollback_error:
+                        rollback_errors.append(str(rollback_error))
+                if rollback_errors:
+                    raise RuntimeError(
+                        "Report publication failed and rollback also failed: "
+                        + "; ".join(rollback_errors)
+                    ) from error
+                outcome = (
+                    "restored the previous pair"
+                    if previous_pair
+                    else "removed the partial pair"
+                )
+                raise RuntimeError(
+                    f"Report publication failed and {outcome}: {error}"
+                ) from error
+    finally:
+        staged_docx.unlink(missing_ok=True)
+        staged_pdf.unlink(missing_ok=True)
+
+
+def _report_names(quick: bool) -> tuple[str, str]:
+    if quick:
+        return QUICK_DOCX_NAME, QUICK_PDF_NAME
+    return DOCX_NAME, PDF_NAME
+
+
 def build_report(quick: bool = False) -> tuple[Path, Path]:
     """Build the quick or full assignment report and return DOCX/PDF paths."""
+    source_snapshot = _source_snapshot(_report_source_paths(quick))
     evaluation, map_history, abnn_history, manifest = _load_report_artifacts(
         quick
     )
-    source_paths = (*_artifact_paths(quick), ROOT / "figures" / "manifest.json")
-    source_hashes = {path: _sha256(path) for path in source_paths}
+    _assert_source_snapshot(source_snapshot, "while loading")
     document = _compose_document(
         evaluation,
         map_history,
@@ -1368,32 +1573,36 @@ def build_report(quick: bool = False) -> tuple[Path, Path]:
         manifest,
         quick=quick,
     )
-
-    if {path: _sha256(path) for path in source_paths} != source_hashes:
-        raise RuntimeError(
-            "Report source artifacts changed during composition; rerun after "
-            "the experiment and figure stages finish."
-        )
+    _assert_source_snapshot(source_snapshot, "during composition")
 
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    docx_path = REPORT_DIR / DOCX_NAME
-    pdf_path = REPORT_DIR / PDF_NAME
+    docx_name, pdf_name = _report_names(quick)
+    docx_path = REPORT_DIR / docx_name
+    pdf_path = REPORT_DIR / pdf_name
     with tempfile.NamedTemporaryFile(
-        prefix=f".{docx_path.stem}-",
+        prefix="report-stage-",
         suffix=".docx",
         dir=REPORT_DIR,
         delete=False,
     ) as temporary:
-        temporary_path = Path(temporary.name)
+        staged_docx = Path(temporary.name)
+    staged_pdf = staged_docx.with_suffix(".pdf")
     try:
-        document.save(temporary_path)
-        if temporary_path.stat().st_size == 0:
-            raise RuntimeError("python-docx created an empty report document")
-        temporary_path.replace(docx_path)
+        document.save(staged_docx)
+        _validate_docx(staged_docx)
+        _assert_source_snapshot(source_snapshot, "while staging the DOCX")
+        _convert_docx_to_pdf(staged_docx, staged_pdf)
+        _validate_report_pair(staged_docx, staged_pdf)
+        _assert_source_snapshot(source_snapshot, "during conversion")
+        _publish_report_pair(
+            staged_docx,
+            staged_pdf,
+            docx_path,
+            pdf_path,
+        )
     finally:
-        temporary_path.unlink(missing_ok=True)
-
-    _convert_docx_to_pdf(docx_path, pdf_path)
+        staged_docx.unlink(missing_ok=True)
+        staged_pdf.unlink(missing_ok=True)
     return docx_path, pdf_path
 
 
