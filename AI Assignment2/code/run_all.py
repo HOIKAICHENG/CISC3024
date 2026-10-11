@@ -1,100 +1,132 @@
-"""One-command reproduction of the ABNN CIFAR-10 study."""
-
-from __future__ import annotations
-
 import argparse
-import os
-import sys
-import time
+import hashlib
+import json
+from pathlib import Path
 
-import torch
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-os.chdir(HERE)
-
-
-def smoke_test() -> None:
-    from bnl import count_bnl, freeze_except_bnl, replace_bn_with_bnl, set_bnl_stochastic
-    from resnet import count_parameters, resnet20
-
-    m = resnet20()
-    x = torch.randn(4, 3, 32, 32)
-    y = m(x)
-    assert y.shape == (4, 10), y.shape
-    n_bn = sum(isinstance(mod, torch.nn.BatchNorm2d) for mod in m.modules())
-    replace_bn_with_bnl(m)
-    assert count_bnl(m) == n_bn and n_bn > 0
-    trainable = freeze_except_bnl(m)
-    assert all(p.requires_grad for p in trainable)
-    assert sum(p.requires_grad for p in m.parameters()) == len(trainable)
-    set_bnl_stochastic(m, True)
-    a, b = m(x), m(x)
-    assert not torch.allclose(a, b), "BNL should be stochastic"
-    set_bnl_stochastic(m, False)
-    a, b = m(x), m(x)
-    assert torch.allclose(a, b)
-    loss = torch.nn.functional.cross_entropy(m(x), torch.zeros(4, dtype=torch.long))
-    loss.backward()
-    print(f"smoke OK  params={count_parameters(resnet20()):,}  BNL={n_bn}", flush=True)
+from .config import ExperimentConfig, run_metadata
+from .data import build_loaders
+from .evaluate import evaluate_methods
+from .make_figures import (
+    figures_are_current,
+    load_valid_evaluation,
+    make_all_figures,
+)
+from .train_abnn import run_abnn_training
+from .train_map import run_map_training
 
 
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--quick", action="store_true", help="tiny schedule, smoke-level numbers only")
-    p.add_argument("--threads", type=int, default=10)
-    args = p.parse_args()
+def _sha256(path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as artifact:
+        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    torch.set_num_threads(args.threads)
-    smoke_test()
 
-    from prepare_data import main as prepare
-    from train_map import train as train_map
-    from train_abnn import train as train_abnn
-    from evaluate import evaluate
-    from make_figures import main as figures
+def checkpoint_provenance(map_checkpoint, member_checkpoints) -> dict:
+    map_checkpoint = Path(map_checkpoint)
+    member_checkpoints = [Path(path) for path in member_checkpoints]
+    return {
+        "map_checkpoint": {
+            "path": map_checkpoint.name,
+            "sha256": _sha256(map_checkpoint),
+        },
+        "member_checkpoints": [
+            {
+                "path": checkpoint.name,
+                "sha256": _sha256(checkpoint),
+            }
+            for checkpoint in member_checkpoints
+        ],
+    }
 
-    print("preparing data ...")
-    prepare()
 
-    class NS:
-        pass
+def evaluation_is_current(
+    path,
+    *,
+    config: ExperimentConfig,
+    quick: bool,
+    provenance: dict,
+) -> bool:
+    try:
+        evaluation = load_valid_evaluation(path)
+    except (FileNotFoundError, OSError, TypeError, ValueError):
+        return False
+    return (
+        evaluation.get("config")
+        == json.loads(json.dumps(config.to_dict()))
+        and evaluation.get("run") == run_metadata(config, quick)
+        and evaluation.get("provenance") == provenance
+    )
 
-    map_args = NS()
-    map_args.epochs = 2 if args.quick else 20
-    map_args.batch_size = 128
-    map_args.lr = 0.1
-    map_args.wd = 5e-4
-    map_args.seed = 0
-    map_args.threads = args.threads
 
-    abnn_args = NS()
-    abnn_args.ckpt = os.path.join(os.path.dirname(HERE), "results", "map_resnet20.pth")
-    abnn_args.members = 2 if args.quick else 3
-    abnn_args.epochs = 1 if args.quick else 5
-    abnn_args.batch_size = 128
-    abnn_args.lr = 1e-3
-    abnn_args.wd = 1e-4
-    abnn_args.factor = 5.0
-    abnn_args.n_prioritized = 4
-    abnn_args.noise_std = 0.1
-    abnn_args.seed = 0
-    abnn_args.threads = args.threads
+def run_experiment(*, quick: bool = False, skip_report: bool = False) -> None:
+    config = ExperimentConfig()
+    loaders = build_loaders(config, quick=quick)
+    map_model, _ = run_map_training(config, loaders, quick=quick)
+    suffix = "_quick" if quick else ""
+    map_checkpoint = (
+        Path(config.results_dir) / f"map_checkpoint{suffix}.pt"
+    )
+    members, _ = run_abnn_training(
+        config,
+        loaders,
+        map_checkpoint,
+        quick=quick,
+    )
+    member_checkpoints = [
+        Path(config.results_dir) / f"abnn_member_{index}{suffix}.pt"
+        for index in range(len(members))
+    ]
+    provenance = checkpoint_provenance(
+        map_checkpoint,
+        member_checkpoints,
+    )
+    evaluation_path = (
+        Path(config.results_dir) / f"evaluation{suffix}.json"
+    )
+    if not evaluation_is_current(
+        evaluation_path,
+        config=config,
+        quick=quick,
+        provenance=provenance,
+    ):
+        evaluate_methods(
+            config,
+            loaders,
+            map_model,
+            members,
+            quick=quick,
+            provenance=provenance,
+        )
+    if not figures_are_current(
+        config.results_dir,
+        "figures",
+        quick=quick,
+    ):
+        make_all_figures(config.results_dir, "figures", quick=quick)
+    if not skip_report:
+        from build_report import build_report
 
-    ev_args = NS()
-    ev_args.map_ckpt = abnn_args.ckpt
-    ev_args.members = abnn_args.members
-    ev_args.l_samples = 2 if args.quick else 3
-    ev_args.noise_std = 0.1
-    ev_args.batch_size = 256
-    ev_args.threads = args.threads
+        build_report(quick=quick)
 
-    t0 = time.time()
-    train_map(map_args)
-    train_abnn(abnn_args)
-    evaluate(ev_args)
-    figures()
-    print(f"all done in {(time.time() - t0) / 60:.1f} min")
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run the ABNN assignment experiment"
+    )
+    parser.add_argument(
+        "--quick",
+        action="store_true",
+        help="run the small end-to-end smoke configuration",
+    )
+    parser.add_argument(
+        "--skip-report",
+        action="store_true",
+        help="do not invoke build_report.py",
+    )
+    args = parser.parse_args()
+    run_experiment(quick=args.quick, skip_report=args.skip_report)
 
 
 if __name__ == "__main__":

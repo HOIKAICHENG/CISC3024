@@ -1,0 +1,54 @@
+{
+  "config": {
+    "seed": 0,
+    "member_seeds": [
+      101,
+      102,
+      103
+    ],
+    "batch_size": 128,
+    "map_epochs": 20,
+    "abnn_epochs": 5,
+    "map_lr": 0.1,
+    "abnn_lr": 0.01,
+    "momentum": 0.9,
+    "weight_decay": 0.0005,
+    "mc_samples": 3,
+    "emphasized_classes": 3,
+    "emphasis_factor": 5.0,
+    "num_workers": 2,
+    "data_dir": "data",
+    "results_dir": "results"
+  },
+  "run": {
+    "mode": "quick",
+    "quick": true,
+    "effective": {
+      "dataset_limits": {
+        "train": 1000,
+        "cifar10_test": 500,
+        "svhn_test": 500,
+        "cifar100_test": 500
+      },
+      "map_epochs": 1,
+      "abnn_epochs": 1,
+      "member_seeds": [
+        101
+      ],
+      "member_count": 1,
+      "mc_samples": 2
+    }
+  },
+  "history": [
+    {
+      "epoch": 1,
+      "loss": 2.358740230560303,
+      "lr": 0.010000000000000002,
+      "accuracy": 0.114,
+      "nll": 2.2956039905548096,
+      "brier": 0.8970617068048636,
+      "ece": 0.03530157780647277
+    }
+  ],
+  "elapsed_seconds": 44.64196639996953
+}
