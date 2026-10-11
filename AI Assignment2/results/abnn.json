@@ -1,0 +1,202 @@
+{
+  "members": 3,
+  "epochs": 5,
+  "factor": 5.0,
+  "n_prioritized": 4,
+  "noise_std": 0.1,
+  "runs": [
+    {
+      "member": 0,
+      "experts": [
+        "horse",
+        "bird",
+        "dog",
+        "cat"
+      ],
+      "class_weights": [
+        1.0,
+        1.0,
+        5.0,
+        5.0,
+        1.0,
+        5.0,
+        1.0,
+        5.0,
+        1.0,
+        1.0
+      ],
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 0.3490796101016876,
+          "test_acc": 84.9,
+          "test_nll": 0.44881656193733216,
+          "epoch_time_s": 84.81768918037415
+        },
+        {
+          "epoch": 2,
+          "train_loss": 0.33886345216096975,
+          "test_acc": 85.25,
+          "test_nll": 0.44196678500175474,
+          "epoch_time_s": 97.66968631744385
+        },
+        {
+          "epoch": 3,
+          "train_loss": 0.3338139213430576,
+          "test_acc": 85.45,
+          "test_nll": 0.43204665265083314,
+          "epoch_time_s": 100.59489512443542
+        },
+        {
+          "epoch": 4,
+          "train_loss": 0.32899629550102427,
+          "test_acc": 86.54,
+          "test_nll": 0.4072633261203766,
+          "epoch_time_s": 101.90134716033936
+        },
+        {
+          "epoch": 5,
+          "train_loss": 0.32195092510336487,
+          "test_acc": 85.96,
+          "test_nll": 0.4221566163063049,
+          "epoch_time_s": 98.7303421497345
+        }
+      ],
+      "final_acc": 85.96,
+      "best_acc": 86.54,
+      "total_time_s": 483.72399616241455,
+      "checkpoint": "D:\\UM\\Year4\\CISC3024\\AI Assignment2\\results\\abnn_member0.pth",
+      "n_bnl": 21,
+      "n_trainable": 1568
+    },
+    {
+      "member": 1,
+      "experts": [
+        "airplane",
+        "truck",
+        "ship",
+        "bird"
+      ],
+      "class_weights": [
+        5.0,
+        1.0,
+        5.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        5.0,
+        5.0
+      ],
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 0.24592404205065507,
+          "test_acc": 86.07,
+          "test_nll": 0.4258227261066437,
+          "epoch_time_s": 106.86762309074402
+        },
+        {
+          "epoch": 2,
+          "train_loss": 0.23970468701460423,
+          "test_acc": 85.75,
+          "test_nll": 0.43677349758148193,
+          "epoch_time_s": 108.26905012130737
+        },
+        {
+          "epoch": 3,
+          "train_loss": 0.23335474895743225,
+          "test_acc": 85.78,
+          "test_nll": 0.445043291425705,
+          "epoch_time_s": 109.61844658851624
+        },
+        {
+          "epoch": 4,
+          "train_loss": 0.22649605085070318,
+          "test_acc": 86.33,
+          "test_nll": 0.4230603265285492,
+          "epoch_time_s": 109.7810869216919
+        },
+        {
+          "epoch": 5,
+          "train_loss": 0.22222979844380647,
+          "test_acc": 86.59,
+          "test_nll": 0.41949885244369506,
+          "epoch_time_s": 111.55385518074036
+        }
+      ],
+      "final_acc": 86.59,
+      "best_acc": 86.59,
+      "total_time_s": 546.0990779399872,
+      "checkpoint": "D:\\UM\\Year4\\CISC3024\\AI Assignment2\\results\\abnn_member1.pth",
+      "n_bnl": 21,
+      "n_trainable": 1568
+    },
+    {
+      "member": 2,
+      "experts": [
+        "cat",
+        "deer",
+        "bird",
+        "frog"
+      ],
+      "class_weights": [
+        1.0,
+        1.0,
+        5.0,
+        5.0,
+        5.0,
+        1.0,
+        5.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 0.3129680163967304,
+          "test_acc": 86.5,
+          "test_nll": 0.412367258644104,
+          "epoch_time_s": 112.02829432487488
+        },
+        {
+          "epoch": 2,
+          "train_loss": 0.30614448900406177,
+          "test_acc": 85.53,
+          "test_nll": 0.44665783576965334,
+          "epoch_time_s": 110.20032715797424
+        },
+        {
+          "epoch": 3,
+          "train_loss": 0.3003738921040144,
+          "test_acc": 85.56,
+          "test_nll": 0.43353728733062746,
+          "epoch_time_s": 110.49524354934692
+        },
+        {
+          "epoch": 4,
+          "train_loss": 0.30453930917458655,
+          "test_acc": 85.72,
+          "test_nll": 0.447230943107605,
+          "epoch_time_s": 111.91242694854736
+        },
+        {
+          "epoch": 5,
+          "train_loss": 0.287121558514161,
+          "test_acc": 86.25,
+          "test_nll": 0.42603211307525635,
+          "epoch_time_s": 109.65978670120239
+        }
+      ],
+      "final_acc": 86.25,
+      "best_acc": 86.5,
+      "total_time_s": 554.308464050293,
+      "checkpoint": "D:\\UM\\Year4\\CISC3024\\AI Assignment2\\results\\abnn_member2.pth",
+      "n_bnl": 21,
+      "n_trainable": 1568
+    }
+  ],
+  "total_time_s": 1602.1120042800903
+}

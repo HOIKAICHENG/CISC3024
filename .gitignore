@@ -6,5 +6,7 @@ hw2/data/
 hw2/results/*.pth
 AI Assignment1/data/
 AI Assignment1/results/*.pth
+AI Assignment2/data/
+AI Assignment2/results/*.pth
 ~$*
 *.tmp
