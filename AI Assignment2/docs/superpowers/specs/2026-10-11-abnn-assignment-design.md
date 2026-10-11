@@ -61,20 +61,22 @@ Gaussian samples from each of the three members. The evaluated methods are:
 - In-distribution training/test data: CIFAR-10, 50,000/10,000 images.
 - Out-of-distribution data: SVHN test and CIFAR-100 test.
 - Input size: 32 by 32 RGB.
-- MAP training: 20 epochs, batch size 128, SGD with momentum, weight decay,
-  warm-up followed by cosine learning-rate decay, random crop, and horizontal
-  flip.
+- MAP training: 20 epochs, batch size 128, SGD at learning rate 0.1 with
+  momentum 0.9 and weight decay 0.0005, one warm-up epoch followed by cosine
+  decay, random crop with four-pixel padding, and horizontal flip.
 - ABNN adaptation: three members, five epochs per member, normalization
-  parameters only, deterministic per-member class emphasis, and no OOD training
-  data.
-- Reproducibility: fixed Python, NumPy, and PyTorch seeds; settings stored with
-  every result file.
+  parameters only, SGD at learning rate 0.01 with momentum 0.9 and no weight
+  decay, and no OOD training data. Each member uses its seed to select three
+  classes whose cross-entropy weight is five instead of one.
+- Reproducibility: global seed 0 and member seeds 101, 102, and 103 for Python,
+  NumPy, and PyTorch; settings stored with every result file.
 
 The primary in-distribution metrics are accuracy, negative log-likelihood,
-Brier score, and expected calibration error. OOD detection uses predictive
-entropy and reports AUROC, AUPR, and FPR95 for each OOD dataset. The report will
-avoid interpreting small differences as conclusive because the reproduction
-uses one training seed and a short schedule.
+Brier score, and expected calibration error with 15 equal-width bins. OOD
+detection uses predictive entropy and reports AUROC, AUPR, and FPR95 for each
+OOD dataset. The report will avoid interpreting small differences as
+conclusive because the reproduction uses one training seed and a short
+schedule.
 
 ## Components and Data Flow
 
@@ -139,8 +141,10 @@ Unit tests will verify:
 - all predictive probability vectors are finite and sum to one.
 - ECE, Brier, AUROC, AUPR, and FPR95 match small hand-checkable cases.
 
-A quick workflow will train on a small subset and execute conversion,
-adaptation, evaluation, plotting, and report generation before the full run.
+A quick workflow will use 1,000 CIFAR-10 training examples, 500 examples from
+each evaluation dataset, one MAP epoch, one adaptation epoch, one ABNN member,
+and two stochastic samples. It will execute conversion, adaptation, evaluation,
+plotting, and report generation before the full run.
 Dataset-download and checkpoint errors will fail with actionable messages.
 Epoch-level checkpoints and logs permit safe resumption.
 
