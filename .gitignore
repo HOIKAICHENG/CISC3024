@@ -1,4 +1,5 @@
 .cursor/
+.worktrees/
 **/__pycache__/
 *.pyc
 hw2/data/
