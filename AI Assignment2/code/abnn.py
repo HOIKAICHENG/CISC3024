@@ -1,5 +1,6 @@
 import random
 
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -113,6 +114,44 @@ def set_stochastic(model: nn.Module, enabled: bool) -> None:
     for module in model.modules():
         if isinstance(module, BayesianBatchNorm2d):
             module.stochastic = enabled
+
+
+@torch.inference_mode()
+def monte_carlo_probabilities(models, loader, samples: int, device):
+    if samples < 1:
+        raise ValueError("Monte Carlo sample count must be positive")
+    if not models:
+        raise ValueError("Monte Carlo prediction requires at least one model")
+    draws = []
+    saved_targets = None
+    for model in models:
+        model.eval()
+        set_stochastic(model, True)
+        for _ in range(samples):
+            batches, targets = [], []
+            for inputs, labels in loader:
+                probabilities = model(inputs.to(device)).softmax(1).cpu()
+                batches.append(probabilities)
+                targets.append(labels.detach().cpu())
+            draws.append(torch.cat(batches))
+            current_targets = torch.cat(targets)
+            if saved_targets is None:
+                saved_targets = current_targets
+            elif not torch.equal(saved_targets, current_targets):
+                raise RuntimeError(
+                    "evaluation loader order changed between Monte Carlo passes"
+                )
+    sample_probs = torch.stack(draws).numpy()
+    probabilities = sample_probs.mean(axis=0)
+    if not np.isfinite(sample_probs).all() or not np.isfinite(probabilities).all():
+        raise ValueError("Monte Carlo probabilities must be finite")
+    if np.any(sample_probs < 0) or np.any(probabilities < 0):
+        raise ValueError("Monte Carlo probabilities must be non-negative")
+    if not np.allclose(sample_probs.sum(axis=-1), 1.0, atol=1e-5):
+        raise ValueError("Monte Carlo sample probabilities must be normalized")
+    if not np.allclose(probabilities.sum(axis=-1), 1.0, atol=1e-5):
+        raise ValueError("Monte Carlo probabilities must be normalized")
+    return probabilities, saved_targets.numpy(), sample_probs
 
 
 def class_weights_for_member(
