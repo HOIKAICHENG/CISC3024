@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import numpy as np
@@ -121,12 +122,37 @@ def _loaders(shuffle: bool):
     }
 
 
-def _map_checkpoint(path):
+def _map_checkpoint(
+    path,
+    *,
+    quick: bool = False,
+    metadata=True,
+    weight_offset: float = 0.0,
+):
     from code.engine import save_training_state
 
     model = _tiny_classifier()
+    with torch.no_grad():
+        model[0].weight.add_(weight_offset)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
-    save_training_state(path, model, optimizer, epoch=0, history=[])
+    checkpoint_metadata = (
+        {
+            "stage": "map",
+            "quick": quick,
+            "epochs": 1 if quick else 20,
+            "config": {},
+        }
+        if metadata
+        else None
+    )
+    save_training_state(
+        path,
+        model,
+        optimizer,
+        epoch=0,
+        history=[],
+        metadata=checkpoint_metadata,
+    )
     return path
 
 
@@ -153,7 +179,7 @@ def test_abnn_training_adapts_only_norm_on_training_data(tmp_path, monkeypatch):
     from code.train_abnn import run_abnn_training
 
     monkeypatch.setattr(train_abnn, "resnet20", _tiny_classifier)
-    checkpoint = _map_checkpoint(tmp_path / "map.pt")
+    checkpoint = _map_checkpoint(tmp_path / "map.pt", quick=True)
     loaders = _loaders(shuffle=False)
     seen = []
     original = train_abnn.train_epoch
@@ -331,13 +357,79 @@ def test_adaptation_rejects_non_map_checkpoint(tmp_path, monkeypatch):
         optimizer,
         epoch=1,
         history=[{"epoch": 1, "loss": 0.5}],
-        metadata={"stage": "abnn"},
+        metadata={"stage": "abnn", "quick": False},
     )
 
     with pytest.raises(ValueError, match="MAP checkpoint"):
         run_abnn_training(
             _config(tmp_path), _loaders(shuffle=False), checkpoint
         )
+
+
+def test_adaptation_rejects_map_checkpoint_without_metadata(
+    tmp_path, monkeypatch
+):
+    import code.train_abnn as train_abnn
+    from code.train_abnn import run_abnn_training
+
+    monkeypatch.setattr(train_abnn, "resnet20", _tiny_classifier)
+    checkpoint = _map_checkpoint(tmp_path / "map.pt", metadata=False)
+
+    with pytest.raises(ValueError, match="required metadata"):
+        run_abnn_training(
+            _config(tmp_path), _loaders(shuffle=False), checkpoint
+        )
+
+
+@pytest.mark.parametrize(
+    ("training_quick", "checkpoint_quick"),
+    [(False, True), (True, False)],
+)
+def test_adaptation_rejects_quick_full_map_mismatch(
+    tmp_path, monkeypatch, training_quick, checkpoint_quick
+):
+    import code.train_abnn as train_abnn
+    from code.train_abnn import run_abnn_training
+
+    monkeypatch.setattr(train_abnn, "resnet20", _tiny_classifier)
+    checkpoint = _map_checkpoint(
+        tmp_path / "map.pt", quick=checkpoint_quick
+    )
+
+    with pytest.raises(ValueError, match="quick/full mode"):
+        run_abnn_training(
+            _config(tmp_path),
+            _loaders(shuffle=False),
+            checkpoint,
+            quick=training_quick,
+        )
+
+
+def test_resume_rejects_members_from_replaced_map_checkpoint(
+    tmp_path, monkeypatch
+):
+    import code.train_abnn as train_abnn
+    from code.train_abnn import run_abnn_training
+
+    monkeypatch.setattr(train_abnn, "resnet20", _tiny_classifier)
+    checkpoint = _map_checkpoint(tmp_path / "map.pt")
+    config = _config(tmp_path, abnn_epochs=1, member_seeds=(101,))
+    run_abnn_training(config, _loaders(shuffle=False), checkpoint)
+    member_state = torch.load(
+        tmp_path / "abnn_member_0.pt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    original_digest = member_state["metadata"]["map_checkpoint_sha256"]
+    assert original_digest == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+
+    _map_checkpoint(checkpoint, weight_offset=1.0)
+
+    with pytest.raises(ValueError, match="originating MAP checkpoint"):
+        run_abnn_training(config, _loaders(shuffle=False), checkpoint)
+
+    replaced_digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    assert original_digest != replaced_digest
 
 
 def test_resume_rejects_checkpoint_from_another_member(tmp_path, monkeypatch):
@@ -353,3 +445,43 @@ def test_resume_rejects_checkpoint_from_another_member(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="incompatible"):
         run_abnn_training(config, _loaders(shuffle=False), checkpoint)
+
+
+@pytest.mark.parametrize(
+    ("quick", "expected_members", "expected_samples", "expected_draws"),
+    [(False, 3, 3, 9), (True, 1, 2, 2)],
+)
+def test_mode_policy_produces_expected_member_sample_draws(
+    tmp_path,
+    monkeypatch,
+    quick,
+    expected_members,
+    expected_samples,
+    expected_draws,
+):
+    import code.train_abnn as train_abnn
+    from code.train_abnn import run_abnn_training
+
+    monkeypatch.setattr(train_abnn, "resnet20", _tiny_classifier)
+    checkpoint = _map_checkpoint(tmp_path / "map.pt", quick=quick)
+    config = _config(
+        tmp_path / "results",
+        member_seeds=(101, 102, 103),
+        abnn_epochs=1,
+        mc_samples=3,
+    )
+    members, _ = run_abnn_training(
+        config, _loaders(shuffle=False), checkpoint, quick=quick
+    )
+    samples = 2 if quick else config.mc_samples
+
+    _, _, sample_probs = monte_carlo_probabilities(
+        members,
+        _loaders(shuffle=False)["cifar10_test"],
+        samples=samples,
+        device=torch.device("cpu"),
+    )
+
+    assert len(members) == expected_members
+    assert samples == expected_samples
+    assert sample_probs.shape[0] == expected_draws

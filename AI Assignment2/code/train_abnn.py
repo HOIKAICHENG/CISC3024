@@ -1,4 +1,5 @@
 import copy
+import hashlib
 from pathlib import Path
 
 import torch
@@ -25,6 +26,7 @@ def _member_metadata(
     quick: bool,
     index: int,
     seed: int,
+    map_checkpoint_sha256: str,
 ) -> dict:
     return {
         "stage": "abnn",
@@ -32,8 +34,39 @@ def _member_metadata(
         "epochs": epochs,
         "member_index": index,
         "member_seed": seed,
+        "map_checkpoint_sha256": map_checkpoint_sha256,
         "config": config.to_dict(),
     }
+
+
+def _checkpoint_sha256(path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as checkpoint:
+        for chunk in iter(lambda: checkpoint.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validate_map_metadata(metadata, quick: bool) -> None:
+    required = {"stage", "quick"}
+    if not isinstance(metadata, dict) or not required.issubset(metadata):
+        missing = required.difference(metadata if isinstance(metadata, dict) else ())
+        raise ValueError(
+            "MAP checkpoint is missing required metadata fields: "
+            f"{sorted(missing)}"
+        )
+    if metadata["stage"] != "map":
+        raise ValueError(
+            "ABNN adaptation requires a MAP checkpoint, "
+            f"got stage {metadata['stage']!r}"
+        )
+    if metadata["quick"] is not quick:
+        expected = "quick" if quick else "full"
+        actual = "quick" if metadata["quick"] is True else "full"
+        raise ValueError(
+            "MAP checkpoint quick/full mode mismatch: "
+            f"expected {expected}, got {actual}"
+        )
 
 
 def _validate_resume_state(state: dict, epochs: int) -> None:
@@ -64,16 +97,8 @@ def run_abnn_training(
     base = resnet20()
     source = load_training_state(map_checkpoint, base)
     source_metadata = source.get("metadata")
-    source_stage = (
-        source_metadata.get("stage")
-        if isinstance(source_metadata, dict)
-        else None
-    )
-    if source_stage not in (None, "map"):
-        raise ValueError(
-            "ABNN adaptation requires a MAP checkpoint, "
-            f"got stage {source_stage!r}"
-        )
+    _validate_map_metadata(source_metadata, quick)
+    map_checkpoint_sha256 = _checkpoint_sha256(map_checkpoint)
     seeds = config.member_seeds[:1] if quick else config.member_seeds
     epochs = 1 if quick else config.abnn_epochs
     suffix = "_quick" if quick else ""
@@ -101,17 +126,32 @@ def run_abnn_training(
         )
         criterion = nn.CrossEntropyLoss(weight=weights)
         checkpoint = Path(config.results_dir) / f"abnn_member_{index}{suffix}.pt"
-        metadata = _member_metadata(config, epochs, quick, index, seed)
+        metadata = _member_metadata(
+            config,
+            epochs,
+            quick,
+            index,
+            seed,
+            map_checkpoint_sha256,
+        )
         history = []
         start = 0
         if checkpoint.exists():
-            state = load_training_state(
-                checkpoint,
-                model,
-                optimizer,
-                restore_rng=True,
-                expected_metadata=metadata,
-            )
+            try:
+                state = load_training_state(
+                    checkpoint,
+                    model,
+                    optimizer,
+                    restore_rng=True,
+                    expected_metadata=metadata,
+                )
+            except ValueError as error:
+                if "metadata is incompatible" not in str(error):
+                    raise
+                raise ValueError(
+                    f"ABNN member {index} checkpoint is incompatible with "
+                    "the originating MAP checkpoint or current run settings"
+                ) from error
             _validate_resume_state(state, epochs)
             history = state["history"]
             start = state["epoch"]
