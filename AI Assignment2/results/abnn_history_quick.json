@@ -1,0 +1,36 @@
+{
+  "config": {
+    "seed": 0,
+    "member_seeds": [
+      101,
+      102,
+      103
+    ],
+    "batch_size": 128,
+    "map_epochs": 20,
+    "abnn_epochs": 5,
+    "map_lr": 0.1,
+    "abnn_lr": 0.01,
+    "momentum": 0.9,
+    "weight_decay": 0.0005,
+    "mc_samples": 3,
+    "emphasized_classes": 3,
+    "emphasis_factor": 5.0,
+    "num_workers": 2,
+    "data_dir": "data",
+    "results_dir": "results"
+  },
+  "members": [
+    [
+      {
+        "epoch": 1,
+        "loss": 2.3610128231048586,
+        "emphasized_classes": [
+          3,
+          5,
+          9
+        ]
+      }
+    ]
+  ]
+}

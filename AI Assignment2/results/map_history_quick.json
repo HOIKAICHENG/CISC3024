@@ -1,0 +1,35 @@
+{
+  "config": {
+    "seed": 0,
+    "member_seeds": [
+      101,
+      102,
+      103
+    ],
+    "batch_size": 128,
+    "map_epochs": 20,
+    "abnn_epochs": 5,
+    "map_lr": 0.1,
+    "abnn_lr": 0.01,
+    "momentum": 0.9,
+    "weight_decay": 0.0005,
+    "mc_samples": 3,
+    "emphasized_classes": 3,
+    "emphasis_factor": 5.0,
+    "num_workers": 2,
+    "data_dir": "data",
+    "results_dir": "results"
+  },
+  "history": [
+    {
+      "epoch": 1,
+      "loss": 2.358740230560303,
+      "lr": 0.010000000000000002,
+      "accuracy": 0.114,
+      "nll": 2.2956039905548096,
+      "brier": 0.8970617068048636,
+      "ece": 0.03530157780647277
+    }
+  ],
+  "elapsed_seconds": 44.64196639996953
+}
